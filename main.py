@@ -536,6 +536,11 @@ def create_order(order: OrderIn, request: Request):
         return {"order_id": oid, "total": total, "status": "demo_pending",
                 "message": "Заказ сохранён, позиция зарезервирована. Оплата пока не подключена; списания нет."}
 
+@app.get("/api/is-admin")
+def check_is_admin(request: Request):
+    telegram_id = require_telegram_user(request)
+    return {"is_admin": bool(ADMIN_TELEGRAM_CHAT_ID) and telegram_id == str(ADMIN_TELEGRAM_CHAT_ID)}
+
 @app.get("/api/me")
 def get_my_account(request: Request):
     telegram_id = require_telegram_user(request)
@@ -968,7 +973,7 @@ HTML = r"""<!doctype html>
   <button class="btn secondary" onclick="loadAccount()">Обновить кабинет</button>
 </section>
 <section id="orderResult" class="notice hide"></section>
-<div class="tabs"><button class="btn secondary" onclick="showAdmin()">Админ-панель</button><button class="btn secondary" onclick="loadCatalog()">Обновить каталог</button></div>
+<div class="tabs"><button id="adminPanelButton" class="btn secondary hide" onclick="showAdmin()">Админ-панель</button><button class="btn secondary" onclick="loadCatalog()">Обновить каталог</button></div>
 <section id="admin" class="hide"><div class="adminbox"><h3>Вход администратора</h3><input id="adminPassword" type="password" placeholder="Пароль из ADMIN_PASSWORD"><button class="btn" onclick="adminLogin()">Войти</button><div id="adminContent"></div></div></section>
 </main>
 <script>
@@ -1006,5 +1011,6 @@ function addProduct(){adminAction('/api/admin/products',{city_id:Number(document
 function savePrice(){let s=document.getElementById('variantId').selectedOptions[0];const raw=document.getElementById('newPrice').value.trim();const price=Number(raw);if(!s){alert('Выберите фасовку');return}if(raw===''||!Number.isInteger(price)||price<0){alert('Введите целую неотрицательную цену в рублях');return}adminAction('/api/admin/variants',{product_id:Number(s.dataset.product),grams:Number(s.dataset.grams),price:price})}
 async function markPaid(id){if(!confirm("Вы проверили поступление денег по заказу "+id+"? После подтверждения клиенту будет отправлено фото товара."))return;try{await apiAdmin("/api/admin/orders/"+encodeURIComponent(id)+"/mark-paid",{});await loadAdmin();alert("Оплата отмечена, фото отправлено покупателю")}catch(e){alert(e.message)}}
 function addQuarry(){adminAction('/api/admin/quarries',{city_id:Number(document.getElementById('quarryCity').value),name:document.getElementById('quarryName').value,address:document.getElementById('quarryAddress').value,coordinates:document.getElementById('quarryCoords').value,photo_url:document.getElementById('quarryPhoto').value,instructions:document.getElementById('quarryInstructions').value})}
-loadCatalog();loadAccount();
+async function revealAdminButton(){try{if(!tg||!tg.initData)return;const r=await fetch("/api/is-admin",{headers:telegramHeaders(),cache:"no-store"});if(!r.ok)return;const d=await r.json();if(d.is_admin)document.getElementById("adminPanelButton").classList.remove("hide")}catch(e){}}
+loadCatalog();loadAccount();revealAdminButton();
 </script></body></html>"""
