@@ -141,7 +141,7 @@ def admin_data(x_admin_password: Optional[str] = Header(default=None)):
           "products":[dict(r) for r in c.execute("SELECT * FROM products ORDER BY id DESC")],
           "variants":[dict(r) for r in c.execute("SELECT * FROM variants ORDER BY product_id,grams")],
           "quarries":[dict(r) for r in c.execute("SELECT * FROM quarries ORDER BY id DESC")],
-          "orders":[dict(r) for r in c.execute("SELECT * FROM orders ORDER BY created_at DESC LIMIT 100")]
+          "orders":[dict(r) for r in c.execute("SELECT o.*, p.name AS product_name FROM orders o LEFT JOIN products p ON p.id=o.product_id ORDER BY o.created_at DESC LIMIT 100")]
         }
 
 
