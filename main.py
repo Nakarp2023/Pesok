@@ -299,6 +299,12 @@ def bot_send(chat_id, text_out: str, keyboard=None):
         )
         if not has_account:
             rows.insert(0, [{"text": "👤 Личный кабинет", "callback_data": "account"}])
+        has_support_contact = any(
+            any(str(button.get("url") or "") == "https://t.me/sergotripcfs" for button in row)
+            for row in rows
+        )
+        if not has_support_contact:
+            rows.append([{"text": "🆘 Связаться с поддержкой", "url": "https://t.me/sergotripcfs"}])
         markup["inline_keyboard"] = rows
         keyboard = markup
     payload = {"chat_id": chat_id, "text": text_out}
