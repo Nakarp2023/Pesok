@@ -113,6 +113,11 @@ def init_db():
           status TEXT NOT NULL DEFAULT 'CREATED',
           created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS bot_last_messages(
+          chat_id TEXT PRIMARY KEY,
+          message_id INTEGER NOT NULL,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
         """)
         if c.execute("SELECT COUNT(*) FROM cities").fetchone()[0] == 0:
             city_ids = {}
@@ -275,10 +280,37 @@ def telegram_api(method: str, payload_obj: dict):
     return result
 
 def bot_send(chat_id, text_out: str, keyboard=None):
+    # Always keep a personal-account shortcut as the first button for customers.
+    is_admin = bool(ADMIN_TELEGRAM_CHAT_ID) and str(chat_id) == str(ADMIN_TELEGRAM_CHAT_ID)
+    if keyboard and not is_admin:
+        markup = dict(keyboard)
+        rows = list(markup.get("inline_keyboard") or [])
+        has_account = any(
+            any(str(button.get("callback_data") or "") == "account" for button in row)
+            for row in rows
+        )
+        if not has_account:
+            rows.insert(0, [{"text": "👤 Личный кабинет / баланс", "callback_data": "account"}])
+        markup["inline_keyboard"] = rows
+        keyboard = markup
     payload = {"chat_id": chat_id, "text": text_out}
     if keyboard:
         payload["reply_markup"] = keyboard
-    return telegram_api("sendMessage", payload)
+    result = telegram_api("sendMessage", payload)
+    # Keep the chat tidy: replace the previous bot message after the new one is sent.
+    if not is_admin:
+        new_message_id = (result.get("result") or {}).get("message_id")
+        with db() as c:
+            previous = c.execute("SELECT message_id FROM bot_last_messages WHERE chat_id=?", (str(chat_id),)).fetchone()
+            c.execute("INSERT INTO bot_last_messages(chat_id,message_id,updated_at) VALUES(?,?,CURRENT_TIMESTAMP) "
+                      "ON CONFLICT(chat_id) DO UPDATE SET message_id=excluded.message_id,updated_at=CURRENT_TIMESTAMP",
+                      (str(chat_id), int(new_message_id or 0)))
+        if previous and previous["message_id"] and previous["message_id"] != new_message_id:
+            try:
+                telegram_api("deleteMessage", {"chat_id": chat_id, "message_id": int(previous["message_id"])})
+            except Exception as exc:
+                print("Previous bot message cleanup skipped: " + str(exc)[:120])
+    return result
 
 def city_keyboard():
     with db() as c:
