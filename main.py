@@ -89,6 +89,30 @@ def init_db():
           order_id TEXT DEFAULT '',
           created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS wallet_accounts(
+          telegram_id TEXT PRIMARY KEY,
+          balance INTEGER NOT NULL DEFAULT 0 CHECK(balance >= 0),
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS wallet_ledger(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          telegram_id TEXT NOT NULL,
+          amount INTEGER NOT NULL,
+          kind TEXT NOT NULL,
+          reference_id TEXT NOT NULL UNIQUE,
+          description TEXT NOT NULL DEFAULT '',
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS wallet_topups(
+          id TEXT PRIMARY KEY,
+          telegram_id TEXT NOT NULL,
+          amount INTEGER NOT NULL CHECK(amount > 0),
+          provider_order_id TEXT UNIQUE NOT NULL,
+          public_id TEXT,
+          payment_url TEXT,
+          status TEXT NOT NULL DEFAULT 'CREATED',
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
         """)
         if c.execute("SELECT COUNT(*) FROM cities").fetchone()[0] == 0:
             city_ids = {}
@@ -126,6 +150,40 @@ def init_db():
             for grams, price in zip((0.5, 1, 2, 3), prices):
                 c.execute("UPDATE variants SET price=? WHERE product_id=? AND grams=?", (price, product["id"], grams))
 init_db()
+
+def telegram_user_from_init_data(init_data: str) -> str:
+    if not TELEGRAM_BOT_TOKEN or not init_data:
+        raise HTTPException(401, "Откройте личный кабинет через Telegram")
+    try:
+        pairs = urllib.parse.parse_qsl(init_data, keep_blank_values=True)
+        data = dict(pairs)
+        received_hash = data.pop("hash", "")
+        if not received_hash:
+            raise ValueError("missing hash")
+        check_string = "\\n".join(f"{k}={v}" for k, v in sorted(data.items()))
+        secret_key = hmac.new(b"WebAppData", TELEGRAM_BOT_TOKEN.encode("utf-8"), hashlib.sha256).digest()
+        calculated = hmac.new(secret_key, check_string.encode("utf-8"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(calculated, received_hash):
+            raise ValueError("invalid hash")
+        auth_date = int(data.get("auth_date", "0"))
+        if auth_date <= 0 or abs(int(time.time()) - auth_date) > 86400:
+            raise ValueError("expired init data")
+        user = json.loads(data.get("user", "{}"))
+        user_id = str(user.get("id", ""))
+        if not user_id.isdigit():
+            raise ValueError("missing user id")
+        return user_id
+    except Exception:
+        raise HTTPException(401, "Не удалось подтвердить профиль Telegram. Закройте и заново откройте Mini App")
+
+def require_telegram_user(request: Request) -> str:
+    return telegram_user_from_init_data(request.headers.get("X-Telegram-Init-Data", ""))
+
+class WalletTopupIn(BaseModel):
+    amount: int = Field(ge=500, le=100000)
+
+class WalletPayIn(BaseModel):
+    order_id: str = Field(min_length=1, max_length=100)
 
 class OrderIn(BaseModel):
     city_id: int
@@ -427,6 +485,62 @@ def create_order(order: OrderIn):
         return {"order_id": oid, "total": total, "status": "demo_pending",
                 "message": "Заказ сохранён, позиция зарезервирована. Оплата пока не подключена; списания нет."}
 
+@app.get("/api/me")
+def get_my_account(request: Request):
+    telegram_id = require_telegram_user(request)
+    with db() as c:
+        c.execute("INSERT OR IGNORE INTO wallet_accounts(telegram_id,balance) VALUES(?,0)", (telegram_id,))
+        account = c.execute("SELECT balance FROM wallet_accounts WHERE telegram_id=?", (telegram_id,)).fetchone()
+        orders = c.execute("""SELECT o.id,o.total,o.status,o.created_at,p.name AS product_name,v.grams
+          FROM orders o LEFT JOIN products p ON p.id=o.product_id
+          LEFT JOIN variants v ON v.id=o.variant_id
+          WHERE o.customer_id=? ORDER BY o.created_at DESC LIMIT 10""", (telegram_id,)).fetchall()
+        ledger = c.execute("""SELECT amount,kind,reference_id,description,created_at
+          FROM wallet_ledger WHERE telegram_id=? ORDER BY id DESC LIMIT 20""", (telegram_id,)).fetchall()
+    return {"telegram_id":telegram_id,"balance":int(account["balance"]),
+            "orders":[dict(x) for x in orders],"operations":[dict(x) for x in ledger]}
+
+@app.post("/api/wallet/topup")
+def create_wallet_topup(payload: WalletTopupIn, request: Request):
+    telegram_id = require_telegram_user(request)
+    if not BETAPAY_API_KEY:
+        raise HTTPException(503, "Приём платежей временно недоступен")
+    topup_id = secrets.token_urlsafe(10)
+    provider_order_id = "wallet_" + topup_id
+    payment = bpay_create_payment(payload.amount, provider_order_id)
+    with db() as c:
+        c.execute("INSERT INTO wallet_topups(id,telegram_id,amount,provider_order_id,public_id,payment_url,status) VALUES(?,?,?,?,?,?,?)",
+          (topup_id,telegram_id,payload.amount,provider_order_id,payment["public_id"],payment["payment_url"],str(payment.get("status") or "CREATED")))
+    return {"ok":True,"topup_id":topup_id,"amount":payload.amount,"payment_url":payment["payment_url"]}
+
+@app.post("/api/wallet/pay-order")
+def wallet_pay_order(payload: WalletPayIn, request: Request):
+    telegram_id = require_telegram_user(request)
+    with db() as c:
+        c.execute("BEGIN IMMEDIATE")
+        order = c.execute("SELECT * FROM orders WHERE id=? AND customer_id=?", (payload.order_id,telegram_id)).fetchone()
+        if not order:
+            raise HTTPException(404, "Заказ не найден в вашем кабинете")
+        if order["status"] == "paid":
+            raise HTTPException(409, "Заказ уже оплачен")
+        account = c.execute("SELECT balance FROM wallet_accounts WHERE telegram_id=?", (telegram_id,)).fetchone()
+        balance = int(account["balance"]) if account else 0
+        amount = int(order["total"])
+        if balance < amount:
+            raise HTTPException(409, "Недостаточно средств на балансе")
+        reference = "order_" + payload.order_id
+        if c.execute("SELECT 1 FROM wallet_ledger WHERE reference_id=?", (reference,)).fetchone():
+            raise HTTPException(409, "Заказ уже оплачен с баланса")
+        c.execute("INSERT OR IGNORE INTO wallet_accounts(telegram_id,balance) VALUES(?,0)", (telegram_id,))
+        c.execute("UPDATE wallet_accounts SET balance=balance-?,updated_at=CURRENT_TIMESTAMP WHERE telegram_id=? AND balance>=?", (amount,telegram_id,amount))
+        if c.execute("SELECT changes()").fetchone()[0] != 1:
+            raise HTTPException(409, "Недостаточно средств на балансе")
+        c.execute("INSERT INTO wallet_ledger(telegram_id,amount,kind,reference_id,description) VALUES(?,?,?,?,?)",
+          (telegram_id,-amount,"purchase",reference,"Оплата заказа "+payload.order_id))
+        c.execute("UPDATE orders SET status='paid',payment_status='PAID' WHERE id=? AND customer_id=?", (payload.order_id,telegram_id))
+        c.execute("UPDATE inventory_items SET status='sold' WHERE order_id=? AND status='reserved'", (payload.order_id,))
+    return {"ok":True,"order_id":payload.order_id,"balance":balance-amount}
+
 def bpay_create_payment(amount: int, order_id: str):
     if not BETAPAY_API_KEY:
         raise HTTPException(503, "Не задан BETAPAY_API_KEY в Render Environment")
@@ -496,6 +610,24 @@ async def bpay_webhook(request: Request):
     if not order_id or not public_id or str(data.get("currency") or "RUB") != "RUB": raise HTTPException(400, "Invalid payment data")
     try: amount = int(data.get("amount"))
     except (TypeError, ValueError): raise HTTPException(400, "Invalid amount")
+    if order_id.startswith("wallet_"):
+        with db() as c:
+            topup = c.execute("SELECT * FROM wallet_topups WHERE provider_order_id=?", (order_id,)).fetchone()
+            if not topup:
+                print("B PAY wallet webhook ignored: topup_not_found")
+                return {"ok": True, "ignored": "topup_not_found"}
+            if int(topup["amount"]) != amount or str(topup["public_id"] or "") != public_id:
+                raise HTTPException(400, "Wallet top-up payment does not match")
+            if topup["status"] == "PAID":
+                return {"ok": True, "duplicate": True, "wallet_topup": True}
+            c.execute("INSERT OR IGNORE INTO wallet_accounts(telegram_id,balance) VALUES(?,0)", (topup["telegram_id"],))
+            reference = "topup_" + topup["id"]
+            if not c.execute("SELECT 1 FROM wallet_ledger WHERE reference_id=?", (reference,)).fetchone():
+                c.execute("UPDATE wallet_accounts SET balance=balance+?,updated_at=CURRENT_TIMESTAMP WHERE telegram_id=?", (amount,topup["telegram_id"]))
+                c.execute("INSERT INTO wallet_ledger(telegram_id,amount,kind,reference_id,description) VALUES(?,?,?,?,?)",
+                  (topup["telegram_id"],amount,"topup",reference,"Пополнение через B PAY"))
+            c.execute("UPDATE wallet_topups SET status='PAID' WHERE id=?", (topup["id"],))
+        return {"ok": True, "paid": True, "wallet_topup": True}
     with db() as c:
         order = c.execute("SELECT o.*, p.name AS product_name, i.address AS item_address, i.photo_url AS item_photo_url FROM orders o JOIN products p ON p.id=o.product_id LEFT JOIN inventory_items i ON i.id=o.inventory_item_id WHERE o.id=?", (order_id,)).fetchone()
         if not order:
