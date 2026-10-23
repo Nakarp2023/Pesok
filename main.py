@@ -208,8 +208,8 @@ async def telegram_webhook(request: Request):
     chat_id = chat.get("id")
     if chat_id and text_in.split(" ", 1)[0].split("@", 1)[0] in ("/start", "/shop", "/menu"):
         keyboard = {"inline_keyboard": [[{"text": "🛒 Открыть PESOK market", "web_app": {"url": PUBLIC_BASE_URL + "/"}}]]}
-        welcome = ("Добро пожаловать в PESOK market! 🏖️\\n"
-                   "Выберите город и товар в магазине. Наличие и стоимость отображаются в Mini App.\\n"
+        welcome = ("Добро пожаловать в PESOK market! 🏖️\n"
+                   "Выберите город и товар в магазине. Наличие и стоимость отображаются в Mini App.\n"
                    "Если нужна помощь с заказом — напишите администратору.")
         payload = json.dumps({"chat_id": chat_id, "text": welcome, "reply_markup": keyboard}, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request("https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/sendMessage",
