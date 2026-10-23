@@ -459,7 +459,8 @@ def notify_admin_new_order(order_id: str, city_id: int, product_id: int, variant
         print("Admin Telegram notification failed: " + str(exc)[:200])
 
 @app.post("/api/orders")
-def create_order(order: OrderIn):
+def create_order(order: OrderIn, request: Request):
+    telegram_id = require_telegram_user(request)
     if order.quantity != 1:
         raise HTTPException(400, "Одна позиция склада оформляется на один заказ. Создайте отдельные заказы для нескольких позиций.")
     with db() as c:
@@ -477,11 +478,11 @@ def create_order(order: OrderIn):
         total = int(v["price"])
         oid = secrets.token_urlsafe(9)
         c.execute("INSERT INTO orders(id,city_id,product_id,variant_id,quantity,total,customer_id,status,inventory_item_id) VALUES(?,?,?,?,?,?,?,?,?)",
-          (oid, order.city_id, order.product_id, order.variant_id, 1, total, order.customer_id[:100], "demo_pending", item["id"]))
+          (oid, order.city_id, order.product_id, order.variant_id, 1, total, telegram_id, "demo_pending", item["id"]))
         c.execute("UPDATE inventory_items SET status='reserved', order_id=? WHERE id=? AND status='available'", (oid, item["id"]))
         if c.execute("SELECT changes()").fetchone()[0] != 1:
             raise HTTPException(409, "Позиция только что была зарезервирована другим заказом. Попробуйте ещё раз.")
-        notify_admin_new_order(oid, order.city_id, order.product_id, order.variant_id, total, order.customer_id[:100])
+        notify_admin_new_order(oid, order.city_id, order.product_id, order.variant_id, total, telegram_id)
         return {"order_id": oid, "total": total, "status": "demo_pending",
                 "message": "Заказ сохранён, позиция зарезервирована. Оплата пока не подключена; списания нет."}
 
@@ -883,6 +884,16 @@ HTML = r"""<!doctype html>
 </style></head><body><header><div class="top"><div><div class="logo">PE<span>S</span>OK</div><div class="tag">МАТЕРИАЛ. ТОЧНО ПО ДЕЛУ.</div></div><div aria-hidden="true"></div></div></header>
 <main><section class="hero"><div class="eyebrow">Песок рядом</div><h1>Выбирай.<br>Заказывай.</h1><p>Каталог по городам и точкам выдачи. Выбери позицию и фасовку, чтобы оформить заказ.</p></section>
 <div class="label">ВАШ ГОРОД</div><div class="cities" id="cities"></div><div class="label">КАТАЛОГ</div><section class="grid" id="products"><div class="notice">Загружаем каталог…</div></section>
+<section class="adminbox" id="customerCabinet">
+  <h2>Личный кабинет</h2><div id="accountSummary" class="notice">Загружаем баланс…</div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0">
+    <input id="walletAmount" type="number" min="500" max="100000" step="100" value="1000" placeholder="Сумма пополнения" style="flex:1;min-width:130px;padding:12px;border:1px solid var(--line);border-radius:10px">
+    <button class="btn" style="width:auto" onclick="topupWallet()">Пополнить</button>
+  </div>
+  <h3>Последние покупки</h3><div id="accountOrders" class="small">—</div>
+  <h3>Операции по кошельку</h3><div id="walletOperations" class="small">—</div>
+  <button class="btn secondary" onclick="loadAccount()">Обновить кабинет</button>
+</section>
 <section id="orderResult" class="notice hide"></section>
 <div class="tabs"><button class="btn secondary" onclick="showAdmin()">Админ-панель</button><button class="btn secondary" onclick="loadCatalog()">Обновить каталог</button></div>
 <section id="admin" class="hide"><div class="adminbox"><h3>Вход администратора</h3><input id="adminPassword" type="password" placeholder="Пароль из ADMIN_PASSWORD"><button class="btn" onclick="adminLogin()">Войти</button><div id="adminContent"></div></div></section>
@@ -900,7 +911,12 @@ function renderProducts(){
   }).join(''):'<div class="notice">В этом городе пока нет товаров.</div>';
 }
 function priceUpdate(pid){let s=document.querySelector('input[name="variant'+pid+'"]:checked');if(s){let p=catalog.products.find(x=>x.id===pid);let b=document.querySelector('#products .product');}}
-async function makeOrder(pid){let p=catalog.products.find(x=>x.id===pid),selected=document.querySelector('input[name="variant'+pid+'"]:checked'),v=selected?Number(selected.value):null;if(!p||!v){alert('Выберите один вариант фасовки');return;}try{let r=await fetch('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({city_id:cityId,product_id:pid,variant_id:v,quantity:1,customer_id:tg&&tg.initDataUnsafe&&tg.initDataUnsafe.user?String(tg.initDataUnsafe.user.id):''})});let d=await r.json();let el=document.getElementById('orderResult');el.classList.remove('hide');if(!r.ok){el.innerHTML='Ошибка: '+esc(d.detail||'Не удалось оформить заказ');}else{el.innerHTML='<b>Заказ: '+esc(d.order_id)+'</b><br>Сумма: '+rub(d.total)+'<br>Создаём ссылку оплаты…';let pr=await fetch('/api/orders/'+encodeURIComponent(d.order_id)+'/payment',{method:'POST'});let pd=await pr.json();if(pr.ok&&pd.payment_url){el.innerHTML='<b>Заказ: '+esc(d.order_id)+'</b><br>Сумма: '+rub(d.total)+'<br><a class="btn" href="'+esc(pd.payment_url)+'" target="_blank" rel="noopener">Перейти к оплате</a><br><small>Заказ будет обработан после подтверждения платежа.</small>';}else{el.innerHTML='<b>Заказ: '+esc(d.order_id)+'</b><br>Сумма: '+rub(d.total)+'<br>'+esc(pd.detail||'Не удалось создать платёж. Обратитесь в поддержку.');}}el.scrollIntoView({behavior:'smooth',block:'center'});}catch(e){alert('Не удалось связаться с сервером')}}
+function telegramHeaders(){return {'Content-Type':'application/json','X-Telegram-Init-Data':tg&&tg.initData?tg.initData:''}}
+async function loadAccount(){const summary=document.getElementById('accountSummary');try{if(!tg||!tg.initData){summary.textContent='Откройте Mini App через Telegram, чтобы войти в личный кабинет.';return}const r=await fetch('/api/me',{headers:telegramHeaders(),cache:'no-store'}),d=await r.json();if(!r.ok)throw Error(d.detail||'Не удалось загрузить кабинет');summary.innerHTML='<div class="small">ДЕНЕЖНЫЙ БАЛАНС</div><div style="font-size:28px;font-weight:800;margin:6px 0">'+rub(d.balance)+'</div><div class="small">Пополнение от 500 ₽. Заказы можно оплачивать с баланса или напрямую через B PAY.</div>';document.getElementById('accountOrders').innerHTML=d.orders.length?d.orders.map(o=>'<div class="order"><b>'+esc(o.product_name||'Заказ')+'</b> · '+esc(String(o.grams||'—'))+' г<br>'+rub(o.total)+' · '+esc(o.status)+'<br><span class="small">'+esc(o.created_at)+' · № '+esc(o.id)+'</span></div>').join(''):'Покупок пока нет';document.getElementById('walletOperations').innerHTML=d.operations.length?d.operations.map(o=>'<div class="order">'+esc(o.description)+'<br><b>'+(o.amount>0?'+':'')+rub(o.amount)+'</b> · '+esc(o.created_at)+'</div>').join(''):'Операций пока нет'}catch(e){summary.textContent=e.message}}
+async function topupWallet(){const amount=Number(document.getElementById('walletAmount').value);if(!Number.isInteger(amount)||amount<500||amount>100000){alert('Сумма пополнения должна быть от 500 до 100 000 ₽');return}try{const r=await fetch('/api/wallet/topup',{method:'POST',headers:telegramHeaders(),body:JSON.stringify({amount})}),d=await r.json();if(!r.ok)throw Error(d.detail||'Не удалось создать платёж');if(d.payment_url){if(tg&&tg.openLink)tg.openLink(d.payment_url);else window.open(d.payment_url,'_blank');}}catch(e){alert(e.message)}}
+async function payOrderFromWallet(orderId){try{const r=await fetch('/api/wallet/pay-order',{method:'POST',headers:telegramHeaders(),body:JSON.stringify({order_id:orderId})}),d=await r.json();if(!r.ok)throw Error(d.detail||'Не удалось оплатить с баланса');alert('Заказ оплачен с баланса. Остаток: '+rub(d.balance));await loadAccount();await loadCatalog()}catch(e){alert(e.message)}}
+async function makeOrder(pid){let p=catalog.products.find(x=>x.id===pid),selected=document.querySelector('input[name="variant'+pid+'"]:checked'),v=selected?Number(selected.value):null;if(!p||!v){alert('Выберите один вариант фасовки');return}try{let r=await fetch('/api/orders',{method:'POST',headers:telegramHeaders(),body:JSON.stringify({city_id:cityId,product_id:pid,variant_id:v,quantity:1})});let d=await r.json();let el=document.getElementById('orderResult');el.classList.remove('hide');if(!r.ok){el.innerHTML='Ошибка: '+esc(d.detail||'Не удалось оформить заказ')}else{el.innerHTML='<b>Заказ: '+esc(d.order_id)+'</b><br>Сумма: '+rub(d.total)+'<br><button class="btn" style="width:auto;margin:14px 8px 8px 0" onclick="payDirect(\''+esc(d.order_id)+'\')">Оплатить через B PAY</button><button class="btn secondary" style="width:auto;margin:14px 0 8px" onclick="payOrderFromWallet(\''+esc(d.order_id)+'\')">Оплатить с баланса</button><br><small>Заказ будет обработан после подтверждения оплаты.</small>'}el.scrollIntoView({behavior:'smooth',block:'center'});await loadAccount()}catch(e){alert('Не удалось связаться с сервером')}}
+async function payDirect(orderId){const el=document.getElementById('orderResult');try{el.insertAdjacentHTML('beforeend','<div class="small">Создаём платёжную ссылку…</div>');const r=await fetch('/api/orders/'+encodeURIComponent(orderId)+'/payment',{method:'POST'}),d=await r.json();if(!r.ok)throw Error(d.detail||'Не удалось создать платёж');if(tg&&tg.openLink)tg.openLink(d.payment_url);else window.open(d.payment_url,'_blank')}catch(e){alert(e.message)}}
 function showAdmin(){document.getElementById('admin').classList.toggle('hide');document.getElementById('admin').scrollIntoView({behavior:'smooth'})}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
 async function apiAdmin(path,body){let r=await fetch(path,{method:body?'POST':'GET',cache:'no-store',headers:{'Content-Type':'application/json','X-Admin-Password':adminPass},body:body?JSON.stringify(body):undefined});let d=await r.json();if(!r.ok){let msg=d.detail;if(Array.isArray(msg))msg=msg.map(x=>x.msg||JSON.stringify(x)).join('; ');else if(msg&&typeof msg==='object')msg=msg.msg||JSON.stringify(msg);throw Error(typeof msg==='string'?msg:'Ошибка запроса ('+r.status+')')}return d}
@@ -917,5 +933,5 @@ function addProduct(){adminAction('/api/admin/products',{city_id:Number(document
 function savePrice(){let s=document.getElementById('variantId').selectedOptions[0];const raw=document.getElementById('newPrice').value.trim();const price=Number(raw);if(!s){alert('Выберите фасовку');return}if(raw===''||!Number.isInteger(price)||price<0){alert('Введите целую неотрицательную цену в рублях');return}adminAction('/api/admin/variants',{product_id:Number(s.dataset.product),grams:Number(s.dataset.grams),price:price})}
 async function markPaid(id){if(!confirm("Вы проверили поступление денег по заказу "+id+"? После подтверждения клиенту будет отправлено фото товара."))return;try{await apiAdmin("/api/admin/orders/"+encodeURIComponent(id)+"/mark-paid",{});await loadAdmin();alert("Оплата отмечена, фото отправлено покупателю")}catch(e){alert(e.message)}}
 function addQuarry(){adminAction('/api/admin/quarries',{city_id:Number(document.getElementById('quarryCity').value),name:document.getElementById('quarryName').value,address:document.getElementById('quarryAddress').value,coordinates:document.getElementById('quarryCoords').value,photo_url:document.getElementById('quarryPhoto').value,instructions:document.getElementById('quarryInstructions').value})}
-loadCatalog();
+loadCatalog();loadAccount();
 </script></body></html>"""
