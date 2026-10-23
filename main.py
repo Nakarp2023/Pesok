@@ -353,7 +353,24 @@ async def telegram_webhook(request: Request):
                     pass
             if not chat_id:
                 return {"ok": True}
-            if data == "support":
+            if data == "account":
+                telegram_id = str(chat_id)
+                with db() as c:
+                    c.execute("INSERT OR IGNORE INTO wallet_accounts(telegram_id,balance) VALUES(?,0)", (telegram_id,))
+                    account = c.execute("SELECT balance FROM wallet_accounts WHERE telegram_id=?", (telegram_id,)).fetchone()
+                    recent = c.execute("""SELECT o.id,o.total,o.status,o.created_at,p.name AS product_name,v.grams
+                        FROM orders o LEFT JOIN products p ON p.id=o.product_id
+                        LEFT JOIN variants v ON v.id=o.variant_id
+                        WHERE o.customer_id=? ORDER BY o.created_at DESC LIMIT 5""", (telegram_id,)).fetchall()
+                message = "👤 Личный кабинет PESOK\\n\\n💳 Баланс: " + str(int(account["balance"])) + " ₽\\n\\n🛍 Последние покупки:"
+                if recent:
+                    for row in recent:
+                        message += "\\n• " + str(row["product_name"] or "Заказ") + " · " + str(row["grams"] or "—") + " г — " + str(row["total"]) + " ₽\\n  Статус: " + str(row["status"]) + " · № " + str(row["id"])
+                else:
+                    message += "\\nПокупок пока нет."
+                message += "\\n\\nДля пополнения кошелька и подробной истории откройте Mini App."
+                bot_send(chat_id, message, {"inline_keyboard": [[{"text":"💳 Пополнить баланс / кабинет","web_app":{"url":PUBLIC_BASE_URL + "/"}}], [{"text":"📍 Каталог","callback_data":"cities"}]]})
+            elif data == "support":
                 bot_send(chat_id, "🆘 Поддержка PESOK\nНапишите следующим сообщением, с какой сложностью столкнулись.")
             elif data.startswith("support:"):
                 support_order_id = data.split(":", 1)[1]
@@ -382,7 +399,7 @@ async def telegram_webhook(request: Request):
                 if error:
                     bot_send(chat_id, "⚠️ " + error, {"inline_keyboard": [[{"text": "📍 В каталог", "callback_data": "cities"}]]})
                 else:
-                    bot_send(chat_id, "✅ Заказ: " + order["order_id"] + "\nТовар: " + order["product"] + " · " + str(order["grams"]) + " г\nСумма: " + str(order["total"]) + " ₽\nФото заказа: " + order["photo_url"] + "\n\nЗаказ зарезервирован. Оплата пока не подключена, списания нет.", {"inline_keyboard": [[{"text": "🆘 Поддержка", "callback_data": "support:" + order["order_id"]}], [{"text": "🛒 Открыть Mini App", "web_app": {"url": PUBLIC_BASE_URL + "/"}}], [{"text": "Выбрать ещё", "callback_data": "cities"}]]})
+                    bot_send(chat_id, "✅ Заказ: " + order["order_id"] + "\nТовар: " + order["product"] + " · " + str(order["grams"]) + " г\nСумма: " + str(order["total"]) + " ₽\nФото заказа: " + order["photo_url"] + "\n\nЗаказ зарезервирован. Оплата пока не подключена, списания нет.", {"inline_keyboard": [[{"text": "👤 Личный кабинет / баланс", "callback_data": "account"}], [{"text": "🆘 Поддержка", "callback_data": "support:" + order["order_id"]}], [{"text": "🛒 Открыть Mini App", "web_app": {"url": PUBLIC_BASE_URL + "/"}}], [{"text": "Выбрать ещё", "callback_data": "cities"}]]})
             return {"ok": True}
         message = update.get("message") or update.get("edited_message") or {}
         chat = message.get("chat") or {}
@@ -394,6 +411,7 @@ async def telegram_webhook(request: Request):
                        "Выберите город и товар прямо в чате или откройте магазин.\n"
                        "Наличие и стоимость отображаются в меню.")
             keyboard = {"inline_keyboard": [
+                [{"text": "👤 Личный кабинет / баланс", "callback_data": "account"}],
                 [{"text": "📍 Выбрать город и товар", "callback_data": "cities"}],
                 [{"text": "🛒 Открыть PESOK market", "web_app": {"url": PUBLIC_BASE_URL + "/"}}]
             ]}
