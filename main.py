@@ -35,13 +35,13 @@ def init_db():
                     ("Песок Миша", "Песок средней фракции от карьера Миша")
                 ]:
                     pid = c.execute("INSERT INTO products(city_id,name,description) VALUES(?,?,?)", (city_id,name,desc)).lastrowid
-                    prices = (2500, 5000, 7000, 10000) if name == "Песок Ольга" else (200, 4000, 8000, 11000)
+                    prices = (2500, 5000, 7000, 10000) if name == "Песок Ольга" else (2000, 4000, 8000, 11000)
                     for grams, price in zip((0.5, 1, 2, 3), prices):
                         c.execute("INSERT INTO variants(product_id,grams,price) VALUES(?,?,?)", (pid,grams,price))
                 c.execute("INSERT INTO quarries(city_id,name,address,instructions) VALUES(?,?,?,?)", (city_id,"Карьер Ольга / Миша","Адрес уточняется у администратора","Точка выдачи будет подтверждена после оформления заказа."))
         # Keep the agreed price list in sync for existing databases too.
         for product in c.execute("SELECT id, name FROM products WHERE name IN ('Песок Ольга', 'Песок Миша')").fetchall():
-            prices = (2500, 5000, 7000, 10000) if product["name"] == "Песок Ольга" else (200, 4000, 8000, 11000)
+            prices = (2500, 5000, 7000, 10000) if product["name"] == "Песок Ольга" else (2000, 4000, 8000, 11000)
             for grams, price in zip((0.5, 1, 2, 3), prices):
                 c.execute("UPDATE variants SET price=? WHERE product_id=? AND grams=?", (price, product["id"], grams))
 init_db()
