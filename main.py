@@ -187,13 +187,13 @@ def notify_admin_new_order(order_id: str, city_id: int, product_id: int, variant
                 WHERE ci.id=? AND p.id=? AND v.id=?""", (city_id, product_id, variant_id)).fetchone()
         if not row:
             return
-        text_msg = ("🛒 Новый заказ в PESOK\\n"
-                    + "Заказ: " + order_id + "\\n"
-                    + "Город: " + str(row["city_name"]) + "\\n"
-                    + "Товар: " + str(row["product_name"]) + " · " + str(row["grams"]) + " г\\n"
-                    + "Сумма: " + str(total) + " ₽\\n"
-                    + "Telegram ID клиента: " + (customer_id or "не указан") + "\\n"
-                    + "Статус: ожидает подтверждения\\n"
+        text_msg = ("🛒 Новый заказ в PESOK\n"
+                    + "Заказ: " + order_id + "\n"
+                    + "Город: " + str(row["city_name"]) + "\n"
+                    + "Товар: " + str(row["product_name"]) + " · " + str(row["grams"]) + " г\n"
+                    + "Сумма: " + str(total) + " ₽\n"
+                    + "Telegram ID клиента: " + (customer_id or "не указан") + "\n"
+                    + "Статус: ожидает подтверждения\n"
                     + "Админка: " + PUBLIC_BASE_URL + "/")
         payload = urllib.parse.urlencode({"chat_id": ADMIN_TELEGRAM_CHAT_ID, "text": text_msg, "disable_web_page_preview": "true"}).encode()
         request = urllib.request.Request("https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/sendMessage", data=payload, method="POST")
