@@ -457,7 +457,7 @@ HTML = r"""<!doctype html>
 <div class="notice">🧪 Демоверсия: платежи пока не подключены. Заказ можно создать для проверки, списания денег нет.</div><section id="orderResult" class="notice hide"></section>
 <div class="tabs"><button class="btn secondary" onclick="showAdmin()">Админ-панель</button><button class="btn secondary" onclick="loadCatalog()">Обновить каталог</button></div>
 <section id="admin" class="hide"><div class="adminbox"><h3>Вход администратора</h3><input id="adminPassword" type="password" placeholder="Пароль из ADMIN_PASSWORD"><button class="btn" onclick="adminLogin()">Войти</button><div id="adminContent"></div></div></section>
-<div class="foot">PESOK · версия 0.1 · Тестовое оформление заказа. Уточняйте характеристики, наличие и условия выдачи у администратора.</div></main>
+</main>
 <script>
 const tg=window.Telegram&&window.Telegram.WebApp;if(tg){tg.ready();tg.expand();}
 let catalog={cities:[],products:[],quarries:[]},cityId=null,adminPass="";
