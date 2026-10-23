@@ -118,6 +118,8 @@ def init_db():
         variant_cols = [r["name"] for r in c.execute("PRAGMA table_info(variants)").fetchall()]
         if "stock" not in variant_cols:
             c.execute("ALTER TABLE variants ADD COLUMN stock INTEGER NOT NULL DEFAULT 0")
+        # Hide all 0.5 g variants from sale while retaining old order/inventory history.
+        c.execute("UPDATE variants SET active=0 WHERE grams=0.5")
         # Keep the agreed price list in sync for existing databases too.
         for product in c.execute("SELECT id, name FROM products WHERE name IN ('Песок Ольга', 'Песок Миша')").fetchall():
             prices = (2500, 5000, 7000, 10000) if product["name"] == "Песок Ольга" else (2000, 4000, 8000, 11000)
@@ -610,7 +612,7 @@ def add_product(item: ProductIn, x_admin_password: Optional[str] = Header(defaul
             raise HTTPException(404, "Город не найден")
         cur = c.execute("INSERT INTO products(city_id,name,description) VALUES(?,?,?)", (item.city_id,item.name.strip(),item.description.strip()))
         pid = cur.lastrowid
-        for grams in (0.5, 1, 2, 3):
+        for grams in (1, 2, 3):
             c.execute("INSERT INTO variants(product_id,grams,price) VALUES(?,?,0)", (pid,grams))
         return {"id": pid}
 
