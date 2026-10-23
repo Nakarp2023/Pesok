@@ -26,12 +26,19 @@ def init_db():
         CREATE TABLE IF NOT EXISTS orders(id TEXT PRIMARY KEY, city_id INTEGER NOT NULL, product_id INTEGER NOT NULL, variant_id INTEGER NOT NULL, quarry_id INTEGER, customer_id TEXT DEFAULT '', quantity INTEGER NOT NULL DEFAULT 1, total INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'demo_pending', created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         """)
         if c.execute("SELECT COUNT(*) FROM cities").fetchone()[0] == 0:
-            city = c.execute("INSERT INTO cities(name) VALUES(?)", ("Невьянск",)).lastrowid
-            for name, desc in [("ОЛЬГА", "Песок. Уточните характеристики перед заказом."), ("МИША", "Песок. Уточните характеристики перед заказом.")]:
-                pid = c.execute("INSERT INTO products(city_id,name,description) VALUES(?,?,?)", (city,name,desc)).lastrowid
-                for grams in (0.5, 1, 2, 3):
-                    c.execute("INSERT INTO variants(product_id,grams,price) VALUES(?,?,?)", (pid,grams,0))
-            c.execute("INSERT INTO quarries(city_id,name,address,instructions) VALUES(?,?,?,?)", (city,"Точка выдачи — настроить","Добавьте адрес в админ-панели","Точка пока не настроена."))
+            city_ids = {}
+            for city_name in ("Невьянск", "Екатеринбург", "Нижний Тагил", "Первоуральск", "Верхняя Пышма", "Кировград"):
+                city_ids[city_name] = c.execute("INSERT INTO cities(name) VALUES(?)", (city_name,)).lastrowid
+            for city_name, city_id in city_ids.items():
+                for name, desc in [
+                    ("Песок Ольга", "Чистый строительный песок от карьера Ольга"),
+                    ("Песок Миша", "Песок средней фракции от карьера Миша")
+                ]:
+                    pid = c.execute("INSERT INTO products(city_id,name,description) VALUES(?,?,?)", (city_id,name,desc)).lastrowid
+                    prices = (150, 250, 450, 650) if name == "Песок Ольга" else (300, 500, 900, 1300)
+                    for grams, price in zip((0.5, 1, 2, 3), prices):
+                        c.execute("INSERT INTO variants(product_id,grams,price) VALUES(?,?,?)", (pid,grams,price))
+                c.execute("INSERT INTO quarries(city_id,name,address,instructions) VALUES(?,?,?,?)", (city_id,"Карьер Ольга / Миша","Адрес уточняется у администратора","Точка выдачи будет подтверждена после оформления заказа."))
 init_db()
 
 class OrderIn(BaseModel):
