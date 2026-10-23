@@ -287,7 +287,7 @@ def telegram_api(method: str, payload_obj: dict):
         raise RuntimeError(str(result.get("description", "Telegram API error"))[:200])
     return result
 
-def bot_send(chat_id, text_out: str, keyboard=None):
+def bot_send(chat_id, text_out: str, keyboard=None, photo=None):
     # Always keep a personal-account shortcut as the first button for customers.
     is_admin = bool(ADMIN_TELEGRAM_CHAT_ID) and str(chat_id) == str(ADMIN_TELEGRAM_CHAT_ID)
     if not is_admin:
@@ -307,10 +307,15 @@ def bot_send(chat_id, text_out: str, keyboard=None):
             rows.append([{"text": "🆘 Связаться с поддержкой", "url": "https://t.me/sergotripcfs"}])
         markup["inline_keyboard"] = rows
         keyboard = markup
-    payload = {"chat_id": chat_id, "text": text_out}
+    payload = {"chat_id": chat_id}
+    if photo:
+        payload["photo"] = photo
+        payload["caption"] = text_out
+    else:
+        payload["text"] = text_out
     if keyboard:
         payload["reply_markup"] = keyboard
-    result = telegram_api("sendMessage", payload)
+    result = telegram_api("sendPhoto" if photo else "sendMessage", payload)
     # Keep the chat tidy: replace the previous bot message after the new one is sent.
     if not is_admin:
         new_message_id = (result.get("result") or {}).get("message_id")
@@ -469,7 +474,7 @@ async def telegram_webhook(request: Request):
                 [{"text": "📍 Выбрать город и товар", "callback_data": "cities"}],
                 [{"text": "🛒 Открыть PESOK market", "web_app": {"url": PUBLIC_BASE_URL + "/"}}]
             ]}
-            bot_send(chat_id, welcome, keyboard)
+            bot_send(chat_id, welcome, keyboard, photo="https://d2jqrm6oza8nb6.cloudfront.net/datasets/adc51246-1c49-4004-940c-fbf6eb1f24a3.png?_jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJrZXlIYXNoIjoiZDQ1Yjc3YTMxZjU1OGI4OCIsImJ1Y2tldCI6InJ1bndheS1kYXRhc2V0cyIsInN0YWdlIjoicHJvZCIsImV4cCI6MTc5Mjg2MDE5NX0.vT_b5R0pUd1xxd99mlldGy3q8h5Njfa-sSuIHv6SpTI")
         elif chat_id and command in ("/help", "/support"):
             with db() as c:
                 c.execute("INSERT OR REPLACE INTO support_sessions(chat_id,order_id,created_at) VALUES(?,?,CURRENT_TIMESTAMP)", (str(chat_id), "",))
