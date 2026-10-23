@@ -3,6 +3,8 @@ import sqlite3
 import secrets
 import base64
 import json
+import hmac
+import hashlib
 import urllib.parse
 import urllib.request
 from typing import Optional
@@ -18,6 +20,7 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 ADMIN_TELEGRAM_CHAT_ID = os.getenv("ADMIN_TELEGRAM_CHAT_ID", "").strip()
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://pesok-store.onrender.com").rstrip("/")
+TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 PHOTO_OLGA_B64 = "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"
 PHOTO_MISHA_B64 = "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABsSFBcUERsXFhceHBsgKEIrKCUlKFE6PTBCYFVlZF9VXVtqeJmBanGQc1tdhbWGkJ6jq62rZ4C8ybqmx5moq6T/2wBDARweHigjKE4rK06kbl1upKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKT/wAARCAC0AUADASIAAhEBAxEB/8QAGgABAAIDAQAAAAAAAAAAAAAAAAIDAQQFBv/EADEQAAICAgEEAQQBBAAGAwAAAAABAgMEESEFEjFBURMiYXEyBhRCgRUjscHR4TNSof/EABYBAQEBAAAAAAAAAAAAAAAAAAABAv/EABcRAQEBAQAAAAAAAAAAAAAAAAABESH/2gAMAwEAAhEDEQA/APMgAAAAAAAAAAAAAAAAAAAAABmKcmlFNt+EgMEqq5W2Rrgtyk9JHUweg5GXR9VyjWn/AB3zv/wdnE6BjY0o2fdZZHlOXhP9FxNY6J01YMbJW9rsb4nrwteDrPhb9EVtPmL18luuCivj4cl+iqcY9z3HcfL34NnwVzTaaaT35A05OFt1tE65dmk+f4yNHO6FjWY7ePD6c487W3s6sop6aXLMvUOE/IR4KyPZOUd709ETqdejixypOqTldJ7nrXav/ZyzLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAG/HpOd2Qtrq7t6a7JLaNFJt6S22e26NjW0YFcL5d0tfH8V8FF2DK2eJXK6p1Wa5i/+ptRS8/IfK0jKSCHakPJkBWNEZJSWiz0QSCK+zS0iE9J+C5mHFN7ZR4nreN/bZ8u1ahZ96/7mge8ysGnKpnVYuJrXcvKOd1LoMclQdM41yrh2JdvEtEHlATtrlVbKueu6L09fJAigAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAdr+m8CGTdO66HdCHCUltNgcXyZUW96T48/g97LEoU4TjTBShvt1FIlHFqhKcoVxTs5nx5Lia8r/TPZ/xRKUE9xem14Z7CJTRiU48puqqMJWPctIv1oDMY6ewZQ0FAABkwzOzDa8EEdbElxrwSMSKKudeTLfHC2Zku1mEEeY670+dVDypxg7J2tzlHfC9HCPcdTxYZmO6Zt6bTWv8AH8nkeo4bwcj6Tmp8b2hRqgAigAAAAAAAAAAAAAAAAAAAAAAAAJ11ztmoVxcpP0kb+X0qePhws7ZOzf368IDSox7MixV1Rcpv18HV6Xm2dHusxsmEnGXMVHl7/wDZo9OunjZcLHCbjLzrfKPR2dNryMunJ12uLUt/PwWRHUqk51RlKLi2tuL9FkItctka1pafLLAMa52ZfIfjgwthWTJjwZIMewGYbAyRUdMbe9MyUZQMbGwI2fPwRRJvjkxtJaCK7Y+/Z4vrFNtOfZ9XlzfcmvaPbS5TOZn4MMqp12NrT2mvKA8eDarwL7arbIR+2vzvhmqRQEo1zlFyUG4r3oiAAAAAAAAAAAAAAAZacXppp/kwABuV9Ly59rdXZFrfdJ6SR0aujZONtwtrlGUdSbjyv0XE1xaabL5qFUHOT9JHY6b0h2dt2XqKT0q9ef2bHRbacaduLZ2xshNpSf8AkS6hlXX5ccbFi3F67mo8r5ZZDW7jYFdeXPIh9qlHtaXj9m92prWkzNdahXGKbelrb9mUtMqIxpgmn2ra8ceCXC40T4GlvZBKJIwjJFZA9AisMAwyjPox4GyMpegDZnZXyyaCMNvY2Yl5Ip8gTIyWuSUU2QnvuabAw3sqmnvZPnZXbtppeSimcNtnF61gVwqWRUlDT04pednal3L7pJL9DtVkV3x49JoI4ssCf9rXVFSrjJpzTeynI6R9m8ZuTS32v2d+cZaS7ePkhVCFaUUtL8geQnXOuXbOMoy+GiJ7dwhN7ai36bR5fq+G8bKlJa7Jtta9EsXWgACKAAAAABsYN0MfKhZOtWRXplMIxk33TUePaLcLG/u8iNP1FW5eGwNnqfUIZsIpV9sovh/g18TCuy21Ulx8vR2Luh1xw5KEk7oralJ62Q/p6HZVbdtNSfb+jWdRu4Ga5R+ll1OEofY5Jbi38GcjqEln1YtSjKuS+5/v8mzjwpTssp7VKT3PtflleVTSnHInGMXVz3a8IrK+ONjb26K973txW9mwlHevleimlxurbhPcWuGidVTqhFLb0kvIVbCXpJ6LEiKZYvBAa2Y0Z3zwYfCCsokVp7J70QSBgwt7IrJHfJJmGig0yuaJ6/JFvygglwGiPeo+ST8AR7eG29jjX5G0uNkZvWufJRYppIjYt8og+Y8FkXuKAhFEJrT2ybfJXa2lsCnu1JbJvxwYdacd+yMHLlaTX4CMKfrltlGVY4190dccsu2mmox3IplCU4OMltpPgDGNd/cY6klrZXk4k8nFac1GUlrTjvRq5OdPEnFW1ahNentott6lCnHrulCbjZ40BycvpdmJS7bLYPnSS9mgdDqucsxwUIOMY/L8s55mtAAAAAAXOm6mNdsouMZcxkUk3bZKCg5ycFyot8ID1FM8t9MUnGErHHhuXlfLPPTrtxLfpX90Iy05dr8ohVl3Va7LJrt8afg2lk2dTvppyJQST/lrTZrUdvClRDGUcRqxPwl5b/Pwc6WflXZKxbseMVKSUoM6uN9ChduP9OMV/Jpkoxq6l9K+ifFU99zj5+UVGxiwrprUIppLjbNqKTXyUdvbxrfy0SU9aSAsjFp/gmQj44Yk9PT9kVnu5Y9lctrbRhOW0/QRalzsnwQ3pGO/kKs4MOxL3yVSscnFLjfj8mY1qW3IC7l8mX4I70iSZFRIS229Fr5RDQQjGKQ42FwiMpa3sCuxfdsqssg09Pktctpr0a0YqU2+5NFRbCf2cslXdHlLwUXLvf06/wCTWivExraKmpa87A3U1vaYlBWR09kHwlpb/Jn6nYuV5ArnF17iudL/AGa2LKyzv+zlPl/Jvxj9zk+W+CP8JtJcP4A141xW+/exK19raj3euDYsgp6bbWvg0rU/75V1y1GMO5r8v0Bz+q4dl+M8iyajKvbcd8a/8nFqqvvhJ1xlONa2+fB2+o52PYrcWycq5JabS2ja6dDAhWnjdrbWm0+X+wry91dlclG2EoPW0mis7mZkYSzLqrq2/C7tb9Lg1MuHT3GUqrJRkofbFR4bJg5wAIoAAAAABcA2On0Qycyuqx6jJ8gdno3SVKMMnIfvivX/AFO7XTCitV0xUILwkc3++rxcuvDSSXakpb8fCOhTKT7u5p7fo2ysi4xSi3yzCrk3w0YslFR0/wDZVjXbUm4tfc/9gW1VuuUtzb2/DLNNyfwRdkFHbkkRut7I7XAFc7Wp9jS/JdBqSfO0cuVk8y+LVdtChz3f/c3KWqUlZPz7fsDZnN67V5Ney2MItykuPJftb35Ryb8l1zahRba/8uyPCA3sPKqyq++l7in2/pmz3vuSXlnDr6vRX9RyhOEtbUXHW/g2XkunGrycicpd7XbGKXG/X5A68npcE0ajs7nHt2v2bEXwiKnsi3yYb5MqK1tvkgyvBCUW0T/BiT14A1rV9m/XgpprnWpSkuG+F8I3J8x8GlmWuENd8VN8R38lRdJLiUeH+fBfH+HJzKbZSudbtU5Jb8ra/wBDNyr4Thj0V99s+ef4pAX3d0G5Re0/j0at3UVQ4KbSc3pNmxByuplC2lxl/GS3w/0ziZ3T3/eVRXdGmbUY8t9oHfxpOyUrXPuT4WvBP6c224ySW+Fo1cOmOFS64zk60+NvwXfWUYOzvTXnh8FFyWl/o5PWctYyUZQk1Ymk09NF2B1erKulS12yTfa299yOb/UtqsdSW9rZBxpSUudvfvZsY+XbRTOqrtUbPPHJqGU2iNEm3Jtvb+SdNU77Y1wW5SeisuxMieLfG2vW18+CCzN6ffhJSs7XGT0mmapt5+ddmyi7Gu2K4jHx+zUAAAAAAJV9v1I9/wDHa3r4LcmVKyXLEU41r+O3yUACxNyl3N8/J2cO3qGJjy3VKVcluPd6/RxITcJJ62k96Z6Gv+oYKvmjUteE+DUqVpwzuoZOXCuNmpb1rWlr8nbnc6YSnYo8c6XBxOsXYysqsxJf8yW5SlF8o0Lcq2+W7rJT18sumOr/AMet7uaIOPrnkrzur25FUI1Ls+375e9/g50ZRlHxyT0wN3H6xfGVau+6uP8ALXDf5Nqzrm69U16nv/PlI5SS9vZhrwEehv6pDGxqpRnXdOUkpKL8L2dCNsJVRcZLsktr8nJ6f02iVf1buyaaT88L8HK6jOt5UoURcIw+3Sk+QNzrNTycuMseDnqH3OPPshHqkI0wqyMfcqmtNetfh+zp9NzaZ4cNuEJw+2S8HO6rPHtvhdVJT2vu0wKJ52ZZJQ+pONc3uO+ON/J6Si/aXdKPfrxs4+Vn0W4Mq6pJ2SS+3XhFPSo4tbV+RdGNifEW/AHo3kQ+i7U9xUW/BKq1WQjKO9SW1tHOyepY2PFLuVs34jHk24XxnUrOeVvXtAbWyDsip9rfJrV2Tssai/tS5NHqOTkY2ZFRx53Q7e5tf9iDsNfD4OL/AFFTN4rtVn27W4teP0zo0ZPfjwnOLrlL/F8tFeZLa7WotfDWwOP0TDl3rLnOSlyo/n0X9VqyanO6rIfa0k0vKI2XRxMGf0r+6T/hzvTZrUdY7cacL4Oy1+JfP7A2odbqrxEkpytiktS9/nZs9Oz682MnZXGLg96b3x8nmnp7b4MUXzqfdBtS/HwFen6rGUcKyVM5QcVvj2jzCfG9tJ/kvXUb40WUuffCcXHUudfo0tvWvQtGxXKVU4zhJxkuUyq6cpzbnJyfy2Q2/kwRQHUr6JdLElbJ/frcYLnZy2tPT8kAAAAAAAAAAAAAAAAGW2/JgAAdrp2Dj39Odtl/ZJtpvuXBxTKk0tb4LBmTak0pbS438l9e+xGsXVT0mm/HgQXRVnPZJ6fOkySg5Lc1yyqM9v7W9r2WwsTWm+TTKEq5JN8aLIQag18md8BMCFdXbPbexdDa2lyT2IyXd9ybX4A6PScemWHK1RTuW993/wCGjd1HKsg6nJQXh9vsol3P+LcU/P5MpJegNzo2W8XI7bH9k1rbk9I7VuVRZHv+pFxW0m3w2vR5iSTX5Ic/P+gN27q98nuhfTjrT3y9kMXIVl05ZmTao68Jvk1WZSXkircqvHVzljSbr14a9mvLW+FoteuzRX2gQbS42VE7Gt8ECKAAgAADpV9Yy4L/AOSLWtacTnNttt+WYAAAAAAAAAAAAAAAAAAAAAAAAAGVJrwzPfLe9kQBdG5+JeC2E1LlGoWV2dm01tFlRtb2glsoru29MtjYnLSKJvzoi1szLwgteih7MaJEHYo+SDLRhrWyLuglxshO5PWgJd2vJGx7g2mtezH1E0VN7IMAAigAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAZT0wANiuTkltlu+GAaRRZZJS4ZW5OSewAIAAyoAAAAAAAAAAAAAAAAAAP//Z"
 app = FastAPI(title="PESOK Store", version="0.1.0")
@@ -158,6 +161,41 @@ def photo_olga():
 def photo_misha():
     from fastapi.responses import Response
     return Response(content=base64.b64decode(PHOTO_MISHA_B64), media_type="image/jpeg")
+
+@app.post("/api/telegram/webhook")
+async def telegram_webhook(request: Request):
+    """Telegram webhook for the customer-facing sales bot."""
+    if not TELEGRAM_BOT_TOKEN:
+        raise HTTPException(503, "Telegram bot is not configured")
+    if not TELEGRAM_WEBHOOK_SECRET:
+        raise HTTPException(503, "Set TELEGRAM_WEBHOOK_SECRET in Render Environment")
+    supplied_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if not hmac.compare_digest(supplied_secret, TELEGRAM_WEBHOOK_SECRET):
+        raise HTTPException(403, "Invalid Telegram webhook secret")
+    try:
+        update = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON update")
+    message = update.get("message") or update.get("edited_message") or {}
+    chat = message.get("chat") or {}
+    text_in = str(message.get("text") or "").strip()
+    chat_id = chat.get("id")
+    if chat_id and text_in.split(" ", 1)[0].split("@", 1)[0] in ("/start", "/shop", "/menu"):
+        keyboard = {"inline_keyboard": [[{"text": "🛒 Открыть PESOK market", "web_app": {"url": PUBLIC_BASE_URL + "/"}}]]}
+        welcome = ("Добро пожаловать в PESOK market! 🏖️\\n"
+                   "Выберите город и товар в магазине. Наличие и стоимость отображаются в Mini App.\\n"
+                   "Если нужна помощь с заказом — напишите администратору.")
+        payload = json.dumps({"chat_id": chat_id, "text": welcome, "reply_markup": keyboard}, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request("https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/sendMessage",
+                                     data=payload, headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=8) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            if not result.get("ok"):
+                print("Telegram welcome message failed: " + str(result.get("description", "unknown"))[:200])
+        except Exception as exc:
+            print("Telegram webhook sendMessage failed: " + str(exc)[:200])
+    return {"ok": True}
 
 @app.get("/health")
 def health():
