@@ -362,13 +362,13 @@ async def telegram_webhook(request: Request):
                         FROM orders o LEFT JOIN products p ON p.id=o.product_id
                         LEFT JOIN variants v ON v.id=o.variant_id
                         WHERE o.customer_id=? ORDER BY o.created_at DESC LIMIT 5""", (telegram_id,)).fetchall()
-                message = "👤 Личный кабинет PESOK\\n\\n💳 Баланс: " + str(int(account["balance"])) + " ₽\\n\\n🛍 Последние покупки:"
+                message = "👤 Личный кабинет PESOK\n\n💳 Баланс: " + str(int(account["balance"])) + " ₽\n\n🛍 Последние покупки:"
                 if recent:
                     for row in recent:
-                        message += "\\n• " + str(row["product_name"] or "Заказ") + " · " + str(row["grams"] or "—") + " г — " + str(row["total"]) + " ₽\\n  Статус: " + str(row["status"]) + " · № " + str(row["id"])
+                        message += "\n• " + str(row["product_name"] or "Заказ") + " · " + str(row["grams"] or "—") + " г — " + str(row["total"]) + " ₽\n  Статус: " + str(row["status"]) + " · № " + str(row["id"])
                 else:
-                    message += "\\nПокупок пока нет."
-                message += "\\n\\nДля пополнения кошелька и подробной истории откройте Mini App."
+                    message += "\nПокупок пока нет."
+                message += "\n\nДля пополнения кошелька и подробной истории откройте Mini App."
                 bot_send(chat_id, message, {"inline_keyboard": [[{"text":"💳 Пополнить баланс / кабинет","web_app":{"url":PUBLIC_BASE_URL + "/"}}], [{"text":"📍 Каталог","callback_data":"cities"}]]})
             elif data == "support":
                 bot_send(chat_id, "🆘 Поддержка PESOK\nНапишите следующим сообщением, с какой сложностью столкнулись.")
