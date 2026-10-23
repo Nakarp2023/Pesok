@@ -171,7 +171,7 @@ def register_telegram_webhook():
     payload = urllib.parse.urlencode({
         "url": PUBLIC_BASE_URL + "/api/telegram/webhook",
         "secret_token": TELEGRAM_WEBHOOK_SECRET,
-        "allowed_updates": json.dumps(["message", "edited_message"])
+        "allowed_updates": json.dumps(["message", "edited_message", "callback_query"])
     }).encode("utf-8")
     req = urllib.request.Request(
         "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/setWebhook",
@@ -188,9 +188,72 @@ def register_telegram_webhook():
     except Exception as exc:
         print("Telegram webhook registration failed: " + str(exc)[:200])
 
+def telegram_api(method: str, payload_obj: dict):
+    payload = json.dumps(payload_obj, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/" + method,
+        data=payload, headers={"Content-Type": "application/json"}, method="POST"
+    )
+    with urllib.request.urlopen(req, timeout=10) as response:
+        result = json.loads(response.read().decode("utf-8"))
+    if not result.get("ok"):
+        raise RuntimeError(str(result.get("description", "Telegram API error"))[:200])
+    return result
+
+def bot_send(chat_id, text_out: str, keyboard=None):
+    payload = {"chat_id": chat_id, "text": text_out}
+    if keyboard:
+        payload["reply_markup"] = keyboard
+    return telegram_api("sendMessage", payload)
+
+def city_keyboard():
+    with db() as c:
+        rows = c.execute("SELECT id,name FROM cities ORDER BY name").fetchall()
+    return {"inline_keyboard": [[{"text": row["name"], "callback_data": "city:" + str(row["id"])}] for row in rows]}
+
+def product_keyboard(city_id: int):
+    with db() as c:
+        rows = c.execute("SELECT id,name FROM products WHERE city_id=? AND active=1 ORDER BY name", (city_id,)).fetchall()
+    buttons = [[{"text": row["name"], "callback_data": "prod:" + str(city_id) + ":" + str(row["id"])}] for row in rows]
+    buttons.append([{"text": "⬅️ Выбрать другой город", "callback_data": "cities"}])
+    return {"inline_keyboard": buttons}
+
+def variant_keyboard(city_id: int, product_id: int):
+    with db() as c:
+        product = c.execute("SELECT name FROM products WHERE id=? AND city_id=? AND active=1", (product_id, city_id)).fetchone()
+        rows = c.execute("SELECT id,grams,price FROM variants WHERE product_id=? AND active=1 ORDER BY grams", (product_id,)).fetchall()
+    if not product:
+        return None, None
+    buttons = [[{"text": str(row["grams"]) + " г — " + str(row["price"]) + " ₽", "callback_data": "buy:" + str(city_id) + ":" + str(product_id) + ":" + str(row["id"])}] for row in rows]
+    buttons.append([{"text": "⬅️ К товарам", "callback_data": "city:" + str(city_id)}])
+    return product["name"], {"inline_keyboard": buttons}
+
+def telegram_create_order(chat_id: int, city_id: int, product_id: int, variant_id: int):
+    with db() as c:
+        c.execute("BEGIN IMMEDIATE")
+        v = c.execute("""SELECT v.*, p.name AS product_name, p.city_id FROM variants v
+            JOIN products p ON p.id=v.product_id
+            WHERE v.id=? AND p.id=? AND p.city_id=? AND v.active=1 AND p.active=1""",
+            (variant_id, product_id, city_id)).fetchone()
+        if not v:
+            return None, "Этот вариант больше недоступен. Выберите товар заново."
+        item = c.execute("""SELECT id FROM inventory_items WHERE city_id=? AND product_id=? AND variant_id=?
+            AND status='available' ORDER BY id LIMIT 1""", (city_id, product_id, variant_id)).fetchone()
+        if not item:
+            return None, "Сейчас этой позиции нет в наличии. Напишите администратору."
+        order_id = secrets.token_urlsafe(9)
+        total = int(v["price"])
+        c.execute("""INSERT INTO orders(id,city_id,product_id,variant_id,quantity,total,customer_id,status,inventory_item_id)
+            VALUES(?,?,?,?,?,?,?,?,?)""", (order_id, city_id, product_id, variant_id, 1, total, str(chat_id), "demo_pending", item["id"]))
+        c.execute("UPDATE inventory_items SET status='reserved',order_id=? WHERE id=? AND status='available'", (order_id, item["id"]))
+        if c.execute("SELECT changes()").fetchone()[0] != 1:
+            raise RuntimeError("Позицию уже забрал другой заказ. Попробуйте ещё раз.")
+    notify_admin_new_order(order_id, city_id, product_id, variant_id, total, str(chat_id))
+    return {"order_id": order_id, "total": total, "product": v["product_name"], "grams": v["grams"]}, None
+
 @app.post("/api/telegram/webhook")
 async def telegram_webhook(request: Request):
-    """Telegram webhook for the customer-facing sales bot."""
+    """Telegram bot: welcome, city/product/variant menus and order creation."""
     if not TELEGRAM_BOT_TOKEN:
         raise HTTPException(503, "Telegram bot is not configured")
     if not TELEGRAM_WEBHOOK_SECRET:
@@ -202,25 +265,62 @@ async def telegram_webhook(request: Request):
         update = await request.json()
     except Exception:
         raise HTTPException(400, "Invalid JSON update")
-    message = update.get("message") or update.get("edited_message") or {}
-    chat = message.get("chat") or {}
-    text_in = str(message.get("text") or "").strip()
-    chat_id = chat.get("id")
-    if chat_id and text_in.split(" ", 1)[0].split("@", 1)[0] in ("/start", "/shop", "/menu"):
-        keyboard = {"inline_keyboard": [[{"text": "🛒 Открыть PESOK market", "web_app": {"url": PUBLIC_BASE_URL + "/"}}]]}
-        welcome = ("Добро пожаловать в PESOK market! 🏖️\n"
-                   "Выберите город и товар в магазине. Наличие и стоимость отображаются в Mini App.\n"
-                   "Если нужна помощь с заказом — напишите администратору.")
-        payload = json.dumps({"chat_id": chat_id, "text": welcome, "reply_markup": keyboard}, ensure_ascii=False).encode("utf-8")
-        req = urllib.request.Request("https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/sendMessage",
-                                     data=payload, headers={"Content-Type": "application/json"}, method="POST")
-        try:
-            with urllib.request.urlopen(req, timeout=8) as response:
-                result = json.loads(response.read().decode("utf-8"))
-            if not result.get("ok"):
-                print("Telegram welcome message failed: " + str(result.get("description", "unknown"))[:200])
-        except Exception as exc:
-            print("Telegram webhook sendMessage failed: " + str(exc)[:200])
+    try:
+        callback = update.get("callback_query")
+        if callback:
+            callback_id = callback.get("id")
+            data = str(callback.get("data") or "")
+            message = callback.get("message") or {}
+            chat_id = (message.get("chat") or {}).get("id")
+            if callback_id:
+                try:
+                    telegram_api("answerCallbackQuery", {"callback_query_id": callback_id})
+                except Exception:
+                    pass
+            if not chat_id:
+                return {"ok": True}
+            if data == "cities":
+                bot_send(chat_id, "📍 Выберите город:", city_keyboard())
+            elif data.startswith("city:"):
+                city_id = int(data.split(":")[1])
+                with db() as c:
+                    city = c.execute("SELECT name FROM cities WHERE id=?", (city_id,)).fetchone()
+                if city:
+                    bot_send(chat_id, "📍 Город: " + city["name"] + "\nВыберите товар:", product_keyboard(city_id))
+            elif data.startswith("prod:"):
+                _, city_raw, product_raw = data.split(":")
+                city_id, product_id = int(city_raw), int(product_raw)
+                name, keyboard = variant_keyboard(city_id, product_id)
+                if name and keyboard:
+                    bot_send(chat_id, "🛒 " + name + "\nВыберите фасовку и цену:", keyboard)
+                else:
+                    bot_send(chat_id, "Товар больше недоступен. Выберите город заново.", city_keyboard())
+            elif data.startswith("buy:"):
+                _, city_raw, product_raw, variant_raw = data.split(":")
+                order, error = telegram_create_order(int(chat_id), int(city_raw), int(product_raw), int(variant_raw))
+                if error:
+                    bot_send(chat_id, "⚠️ " + error, {"inline_keyboard": [[{"text": "📍 В каталог", "callback_data": "cities"}]]})
+                else:
+                    bot_send(chat_id, "✅ Заказ создан: " + order["order_id"] + "\n" + order["product"] + " · " + str(order["grams"]) + " г\nСумма: " + str(order["total"]) + " ₽\n\nПлатёж пока не подключён. Заказ зарезервирован, списания нет.", {"inline_keyboard": [[{"text": "🛒 Открыть Mini App", "web_app": {"url": PUBLIC_BASE_URL + "/"}}], [{"text": "Выбрать ещё", "callback_data": "cities"}]]})
+            return {"ok": True}
+        message = update.get("message") or update.get("edited_message") or {}
+        chat = message.get("chat") or {}
+        text_in = str(message.get("text") or "").strip()
+        chat_id = chat.get("id")
+        command = text_in.split(" ", 1)[0].split("@", 1)[0]
+        if chat_id and command in ("/start", "/shop", "/menu"):
+            welcome = ("Добро пожаловать в PESOK market! 🏖️\n"
+                       "Выберите город и товар прямо в чате или откройте магазин.\n"
+                       "Наличие и стоимость отображаются в меню.")
+            keyboard = {"inline_keyboard": [
+                [{"text": "📍 Выбрать город и товар", "callback_data": "cities"}],
+                [{"text": "🛒 Открыть PESOK market", "web_app": {"url": PUBLIC_BASE_URL + "/"}}]
+            ]}
+            bot_send(chat_id, welcome, keyboard)
+        elif chat_id and command in ("/help",):
+            bot_send(chat_id, "Выберите город и товар через меню. Для помощи с заказом напишите администратору.", {"inline_keyboard": [[{"text": "📍 Каталог", "callback_data": "cities"}], [{"text": "🛒 Открыть Mini App", "web_app": {"url": PUBLIC_BASE_URL + "/"}}]]})
+    except Exception as exc:
+        print("Telegram webhook processing failed: " + str(exc)[:240])
     return {"ok": True}
 
 @app.get("/health")
