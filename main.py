@@ -32,6 +32,17 @@ def init_db():
         CREATE TABLE IF NOT EXISTS variants(id INTEGER PRIMARY KEY, product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE, grams REAL NOT NULL, price INTEGER NOT NULL DEFAULT 0, active INTEGER DEFAULT 1);
         CREATE TABLE IF NOT EXISTS quarries(id INTEGER PRIMARY KEY, city_id INTEGER NOT NULL REFERENCES cities(id), name TEXT NOT NULL, address TEXT DEFAULT '', coordinates TEXT DEFAULT '', instructions TEXT DEFAULT '', photo_url TEXT DEFAULT '', active INTEGER DEFAULT 1);
         CREATE TABLE IF NOT EXISTS orders(id TEXT PRIMARY KEY, city_id INTEGER NOT NULL, product_id INTEGER NOT NULL, variant_id INTEGER NOT NULL, quarry_id INTEGER, customer_id TEXT DEFAULT '', quantity INTEGER NOT NULL DEFAULT 1, total INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'demo_pending', created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS inventory_items(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          city_id INTEGER NOT NULL REFERENCES cities(id),
+          product_id INTEGER NOT NULL REFERENCES products(id),
+          variant_id INTEGER NOT NULL REFERENCES variants(id),
+          address TEXT NOT NULL,
+          photo_url TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'available',
+          order_id TEXT UNIQUE,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
         """)
         if c.execute("SELECT COUNT(*) FROM cities").fetchone()[0] == 0:
             city_ids = {}
@@ -50,6 +61,8 @@ def init_db():
         order_cols = [r["name"] for r in c.execute("PRAGMA table_info(orders)").fetchall()]
         if "photo_sent" not in order_cols:
             c.execute("ALTER TABLE orders ADD COLUMN photo_sent INTEGER NOT NULL DEFAULT 0")
+        if "inventory_item_id" not in order_cols:
+            c.execute("ALTER TABLE orders ADD COLUMN inventory_item_id INTEGER")
         variant_cols = [r["name"] for r in c.execute("PRAGMA table_info(variants)").fetchall()]
         if "stock" not in variant_cols:
             c.execute("ALTER TABLE variants ADD COLUMN stock INTEGER NOT NULL DEFAULT 0")
@@ -88,6 +101,13 @@ class QuarryIn(BaseModel):
     instructions: str = ""
     photo_url: str = ""
 
+class InventoryIn(BaseModel):
+    city_id: int
+    product_id: int
+    variant_id: int
+    address: str = Field(min_length=3, max_length=500)
+    photo_url: str = Field(min_length=8, max_length=2000)
+
 def admin_guard(password: Optional[str]):
     if not ADMIN_PASSWORD:
         raise HTTPException(503, "Администрирование отключено: задайте ADMIN_PASSWORD в настройках сервиса.")
@@ -122,22 +142,29 @@ def catalog():
 
 @app.post("/api/orders")
 def create_order(order: OrderIn):
+    if order.quantity != 1:
+        raise HTTPException(400, "Одна позиция склада оформляется на один заказ. Создайте отдельные заказы для нескольких позиций.")
     with db() as c:
+        c.execute("BEGIN IMMEDIATE")
         v = c.execute("""SELECT v.*, p.city_id FROM variants v JOIN products p ON p.id=v.product_id
           WHERE v.id=? AND p.id=? AND p.city_id=? AND v.active=1 AND p.active=1""",
           (order.variant_id, order.product_id, order.city_id)).fetchone()
         if not v:
             raise HTTPException(400, "Выбранный вариант больше недоступен")
-        reserved = c.execute("SELECT COALESCE(SUM(quantity),0) FROM orders WHERE variant_id=? AND status='demo_pending'", (order.variant_id,)).fetchone()[0]
-        available = max(0, int(v["stock"]) - int(reserved))
-        if available < order.quantity:
-            raise HTTPException(409, "Недостаточно товара в наличии. Доступно: " + str(available))
-        total = int(v["price"]) * order.quantity
+        item = c.execute("""SELECT id FROM inventory_items
+          WHERE city_id=? AND product_id=? AND variant_id=? AND status='available'
+          ORDER BY id LIMIT 1""", (order.city_id, order.product_id, order.variant_id)).fetchone()
+        if not item:
+            raise HTTPException(409, "В этом городе нет свободных позиций такого товара. Обратитесь к администратору.")
+        total = int(v["price"])
         oid = secrets.token_urlsafe(9)
-        c.execute("INSERT INTO orders(id,city_id,product_id,variant_id,quantity,total,customer_id,status) VALUES(?,?,?,?,?,?,?,?)",
-          (oid, order.city_id, order.product_id, order.variant_id, order.quantity, total, order.customer_id[:100], "demo_pending"))
+        c.execute("INSERT INTO orders(id,city_id,product_id,variant_id,quantity,total,customer_id,status,inventory_item_id) VALUES(?,?,?,?,?,?,?,?,?)",
+          (oid, order.city_id, order.product_id, order.variant_id, 1, total, order.customer_id[:100], "demo_pending", item["id"]))
+        c.execute("UPDATE inventory_items SET status='reserved', order_id=? WHERE id=? AND status='available'", (oid, item["id"]))
+        if c.execute("SELECT changes()").fetchone()[0] != 1:
+            raise HTTPException(409, "Позиция только что была зарезервирована другим заказом. Попробуйте ещё раз.")
         return {"order_id": oid, "total": total, "status": "demo_pending",
-                "message": "Тестовый заказ сохранён. Оплата не подключена; деньги не списываются."}
+                "message": "Заказ сохранён, позиция зарезервирована. Оплата пока не подключена; списания нет."}
 
 @app.get("/api/admin/data")
 def admin_data(x_admin_password: Optional[str] = Header(default=None)):
@@ -148,7 +175,10 @@ def admin_data(x_admin_password: Optional[str] = Header(default=None)):
           "products":[dict(r) for r in c.execute("SELECT * FROM products ORDER BY id DESC")],
           "variants":[dict(r) for r in c.execute("SELECT * FROM variants ORDER BY product_id,grams")],
           "quarries":[dict(r) for r in c.execute("SELECT * FROM quarries ORDER BY id DESC")],
-          "orders":[dict(r) for r in c.execute("SELECT o.*, p.name AS product_name FROM orders o LEFT JOIN products p ON p.id=o.product_id ORDER BY o.created_at DESC LIMIT 100")]
+          "orders":[dict(r) for r in c.execute("SELECT o.*, p.name AS product_name FROM orders o LEFT JOIN products p ON p.id=o.product_id ORDER BY o.created_at DESC LIMIT 100")],
+          "inventory":[dict(r) for r in c.execute("""SELECT i.*, c.name AS city_name, p.name AS product_name, v.grams, v.price
+            FROM inventory_items i JOIN cities c ON c.id=i.city_id JOIN products p ON p.id=i.product_id
+            JOIN variants v ON v.id=i.variant_id ORDER BY i.id DESC LIMIT 500""")]
         }
 
 
@@ -158,20 +188,23 @@ def mark_order_paid(order_id: str, x_admin_password: Optional[str] = Header(defa
     if not TELEGRAM_BOT_TOKEN:
         raise HTTPException(503, "Не задан TELEGRAM_BOT_TOKEN в Render → Environment")
     with db() as conn:
-        order = conn.execute("SELECT o.*, p.name AS product_name FROM orders o JOIN products p ON p.id=o.product_id WHERE o.id=?", (order_id,)).fetchone()
+        conn.execute("BEGIN IMMEDIATE")
+        order = conn.execute("""SELECT o.*, p.name AS product_name, i.address AS item_address, i.photo_url AS item_photo_url,
+            i.status AS item_status FROM orders o JOIN products p ON p.id=o.product_id
+            LEFT JOIN inventory_items i ON i.id=o.inventory_item_id WHERE o.id=?""", (order_id,)).fetchone()
         if not order:
             raise HTTPException(404, "Заказ не найден")
+        if order["photo_sent"]:
+            return {"ok": True, "message": "Фото и адрес уже отправлены"}
         if not str(order["customer_id"]).isdigit():
             raise HTTPException(400, "Нет Telegram ID покупателя. Покупатель должен открыть бота и нажать /start до заказа.")
-        if order["photo_sent"]:
-            return {"ok": True, "message": "Фото уже отправлено"}
-        reserved = conn.execute("SELECT COALESCE(SUM(quantity),0) FROM orders WHERE variant_id=? AND status='demo_pending'", (order["variant_id"],)).fetchone()[0]
-        variant = conn.execute("SELECT stock FROM variants WHERE id=?", (order["variant_id"],)).fetchone()
-        if not variant or int(variant["stock"]) < int(order["quantity"]):
-            raise HTTPException(409, "На складе недостаточно товара для этого заказа")
-        photo_path = "olga.jpg" if "Ольга" in order["product_name"] else "misha.jpg"
-        photo_url = PUBLIC_BASE_URL + "/media/" + photo_path
-        caption = "Оплата подтверждена! Заказ " + order_id + ". " + order["product_name"] + " — " + str(order["total"]) + " ₽."
+        if not order["inventory_item_id"] or order["item_status"] != "reserved":
+            raise HTTPException(409, "За заказом не закреплена зарезервированная позиция склада. Проверьте заказ в админке.")
+        photo_url = str(order["item_photo_url"] or "").strip()
+        address = str(order["item_address"] or "").strip()
+        if not photo_url.startswith(("https://", "http://")) or not address:
+            raise HTTPException(409, "У позиции склада не указаны корректная ссылка на фото и адрес.")
+        caption = "Оплата подтверждена! Заказ " + order_id + "\n" + order["product_name"] + " — " + str(order["total"]) + " ₽.\nАдрес выдачи: " + address + "\nФото этой позиции: " + photo_url
         payload = urllib.parse.urlencode({"chat_id": order["customer_id"], "photo": photo_url, "caption": caption}).encode()
         request = urllib.request.Request("https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/sendPhoto", data=payload, method="POST")
         try:
@@ -182,10 +215,12 @@ def mark_order_paid(order_id: str, x_admin_password: Optional[str] = Header(defa
         except HTTPException:
             raise
         except Exception:
-            raise HTTPException(502, "Не удалось отправить фото. Проверьте токен бота и доступность Telegram.")
-        conn.execute("UPDATE variants SET stock=stock-? WHERE id=? AND stock>=?", (order["quantity"], order["variant_id"], order["quantity"]))
+            raise HTTPException(502, "Не удалось отправить фото позиции. Проверьте ссылку на фото и токен бота.")
+        conn.execute("UPDATE inventory_items SET status='sold' WHERE id=? AND status='reserved' AND order_id=?", (order["inventory_item_id"], order_id))
+        if conn.execute("SELECT changes()").fetchone()[0] != 1:
+            raise HTTPException(409, "Не удалось отметить позицию как проданную.")
         conn.execute("UPDATE orders SET status='paid', photo_sent=1 WHERE id=?", (order_id,))
-        return {"ok": True, "message": "Оплата отмечена, фото отправлено"}
+        return {"ok": True, "message": "Оплата отмечена, адрес и фото конкретной позиции отправлены покупателю"}
 
 @app.post("/api/admin/cities")
 def add_city(item: CityIn, x_admin_password: Optional[str] = Header(default=None)):
@@ -211,6 +246,23 @@ def add_product(item: ProductIn, x_admin_password: Optional[str] = Header(defaul
             c.execute("INSERT INTO variants(product_id,grams,price) VALUES(?,?,0)", (pid,grams))
         return {"id": pid}
 
+
+@app.post("/api/admin/inventory")
+def add_inventory_item(item: InventoryIn, x_admin_password: Optional[str] = Header(default=None)):
+    admin_guard(x_admin_password)
+    address = item.address.strip()
+    photo_url = item.photo_url.strip()
+    if not address or not photo_url.startswith(("https://", "http://")):
+        raise HTTPException(400, "Укажите адрес и полную ссылку на фото (https://...)")
+    with db() as c:
+        row = c.execute("""SELECT v.id FROM variants v JOIN products p ON p.id=v.product_id
+          WHERE v.id=? AND v.product_id=? AND p.city_id=? AND p.active=1 AND v.active=1""",
+          (item.variant_id, item.product_id, item.city_id)).fetchone()
+        if not row:
+            raise HTTPException(400, "Город, товар и фасовка не соответствуют друг другу")
+        cur = c.execute("""INSERT INTO inventory_items(city_id,product_id,variant_id,address,photo_url,status)
+          VALUES(?,?,?,?,?,'available')""", (item.city_id,item.product_id,item.variant_id,address,photo_url))
+        return {"ok": True, "id": cur.lastrowid, "message": "Позиция добавлена на склад"}
 
 @app.post("/api/admin/variants/stock")
 def update_variant_stock(payload: dict, x_admin_password: Optional[str] = Header(default=None)):
@@ -286,9 +338,11 @@ function showAdmin(){document.getElementById('admin').classList.toggle('hide');d
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
 async function apiAdmin(path,body){let r=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-Admin-Password':adminPass},body:body?JSON.stringify(body):undefined});let d=await r.json();if(!r.ok)throw Error(d.detail||'Ошибка');return d}
 async function adminLogin(){adminPass=document.getElementById('adminPassword').value;await loadAdmin()}
-async function loadAdmin(){let el=document.getElementById('adminContent');try{let d=await apiAdmin('/api/admin/data');let cityOpts=d.cities.map(c=>'<option value="'+c.id+'">'+esc(c.name)+'</option>').join('');let variantOpts=d.variants.map(v=>{let p=d.products.find(p=>p.id===v.product_id);return '<option value="'+v.product_id+'" data-grams="'+v.grams+'">'+esc(p?p.name:'Товар')+' · '+v.grams+' г · '+rub(v.price)+'</option>'}).join('');el.innerHTML='<div class="notice">Админ-панель подключена.</div><h3>Остатки на складе</h3><p class="small">Укажи число доступных единиц для каждой фасовки. Ноль — заказы отключены.</p>'+d.variants.map(v=>{let p=d.products.find(p=>p.id===v.product_id);return '<div class="order"><b>'+esc(p?p.name:'Товар')+'</b> · '+v.grams+' г · '+rub(v.price)+'<br>Остаток: '+Number(v.stock||0)+'<br><input type="number" min="0" max="1000000" id="stock'+v.id+'" value="'+Number(v.stock||0)+'" placeholder="Количество на складе"><button class="btn" onclick="saveStock('+v.id+')">Сохранить остаток</button></div>'}).join('')+'<h3>Добавить город</h3><input id="newCity" placeholder="Название города"><button class="btn" onclick="addCity()">Добавить город</button><h3>Добавить товар</h3><select id="newProductCity">'+cityOpts+'</select><input id="newProductName" placeholder="Название товара"><textarea id="newProductDesc" placeholder="Описание"></textarea><button class="btn" onclick="addProduct()">Добавить товар</button><h3>Установить цену</h3><select id="variantId">'+variantOpts+'</select><input id="newPrice" type="number" min="0" placeholder="Цена в рублях"><button class="btn" onclick="savePrice()">Сохранить цену</button><h3>Добавить карьер / точку выдачи</h3><select id="quarryCity">'+cityOpts+'</select><input id="quarryName" placeholder="Название точки"><input id="quarryAddress" placeholder="Адрес"><input id="quarryCoords" placeholder="Координаты или ссылка на карту"><input id="quarryPhoto" placeholder="Ссылка на фото"><textarea id="quarryInstructions" placeholder="Инструкции по получению"></textarea><button class="btn" onclick="addQuarry()">Добавить точку</button><h3>Последние заказы</h3>'+(d.orders.map(o=>'<div class="order"><b>'+esc(o.id)+'</b> · '+rub(o.total)+'<br>'+esc(o.product_name||'Товар')+' · статус: '+esc(o.status)+' · '+esc(o.created_at)+(o.customer_id?'<br>Telegram ID: '+esc(o.customer_id):'<br>Нет Telegram ID')+(o.photo_sent?'<br>Фото отправлено':(o.status!=='paid'?'<br><button class="btn" onclick="markPaid(\''+esc(o.id)+'\')">Подтвердить оплату и отправить фото</button>':''))+'</div>').join('')||'<p class="small">Заказов пока нет</p>')}catch(e){el.innerHTML='<div class="notice">'+esc(e.message)+'. Проверьте пароль и переменные Render.</div>'}}
+async function loadAdmin(){let el=document.getElementById('adminContent');try{let d=await apiAdmin('/api/admin/data');let cityOpts=d.cities.map(c=>'<option value="'+c.id+'">'+esc(c.name)+'</option>').join('');let productOpts=d.products.map(p=>'<option value="'+p.id+'" data-city="'+p.city_id+'">'+esc(p.name)+' · '+esc((d.cities.find(c=>c.id===p.city_id)||{}).name||'')+'</option>').join('');let variantOpts=d.variants.map(v=>{let p=d.products.find(p=>p.id===v.product_id);return '<option value="'+v.id+'" data-product="'+v.product_id+'" data-city="'+(p?p.city_id:'')+'">'+esc(p?p.name:'Товар')+' · '+v.grams+' г · '+rub(v.price)+'</option>'}).join('');let invCounts=d.inventory.reduce((a,i)=>(a[i.status]=(a[i.status]||0)+1,a),{});el.innerHTML='<div class="notice">Админ-панель подключена. Заказы резервируют одну конкретную свободную позицию по городу, товару и фасовке.</div><h3>Добавить позицию на склад</h3><p class="small">Каждая строка — отдельная физическая позиция с собственным адресом и ссылкой на фото. После подтверждения оплаты эта позиция станет проданной.</p><label>Город<select id="invCity" onchange="filterInventoryOptions()">'+cityOpts+'</select></label><label>Товар<select id="invProduct" onchange="filterInventoryOptions()">'+productOpts+'</select></label><label>Фасовка<select id="invVariant">'+variantOpts+'</select></label><input id="invAddress" placeholder="Точный адрес выдачи"><input id="invPhoto" type="url" placeholder="Прямая ссылка на фото (https://...)"><button class="btn" onclick="addInventory()">Добавить позицию</button><h3>Склад по позициям</h3><div class="notice">Свободно: '+(invCounts.available||0)+' · Зарезервировано: '+(invCounts.reserved||0)+' · Продано: '+(invCounts.sold||0)+'</div>'+(d.inventory.map(i=>'<div class="order"><b>#'+i.id+' · '+esc(i.city_name)+' · '+esc(i.product_name)+'</b><br>'+i.grams+' г · '+rub(i.price)+'<br>Адрес: '+esc(i.address)+'<br><a href="'+esc(i.photo_url)+'" target="_blank" rel="noopener">Открыть фото позиции</a><br>Статус: <b>'+esc(i.status)+'</b>'+(i.order_id?'<br>Заказ: '+esc(i.order_id):'')+'</div>').join('')||'<p class="small">Позиции ещё не добавлены</p>')+'<h3>Старый общий счётчик остатков</h3><p class="small">Для новых заказов используется список конкретных позиций выше; этот счётчик не влияет на доступность позиций.</p>'+d.variants.map(v=>{let p=d.products.find(p=>p.id===v.product_id);return '<div class="order"><b>'+esc(p?p.name:'Товар')+'</b> · '+v.grams+' г · '+rub(v.price)+'<br>Старый счётчик: '+Number(v.stock||0)+'<br><input type="number" min="0" max="1000000" id="stock'+v.id+'" value="'+Number(v.stock||0)+'" placeholder="Старый общий остаток"><button class="btn" onclick="saveStock('+v.id+')">Сохранить старый счётчик</button></div>'}).join('')+'<h3>Добавить город</h3><input id="newCity" placeholder="Название города"><button class="btn" onclick="addCity()">Добавить город</button><h3>Добавить товар</h3><select id="newProductCity">'+cityOpts+'</select><input id="newProductName" placeholder="Название товара"><textarea id="newProductDesc" placeholder="Описание"></textarea><button class="btn" onclick="addProduct()">Добавить товар</button><h3>Установить цену</h3><select id="variantId">'+variantOpts+'</select><input id="newPrice" type="number" min="0" placeholder="Цена в рублях"><button class="btn" onclick="savePrice()">Сохранить цену</button><h3>Добавить карьер / точку выдачи</h3><select id="quarryCity">'+cityOpts+'</select><input id="quarryName" placeholder="Название точки"><input id="quarryAddress" placeholder="Адрес"><input id="quarryCoords" placeholder="Координаты или ссылка на карту"><input id="quarryPhoto" placeholder="Ссылка на фото"><textarea id="quarryInstructions" placeholder="Инструкции по получению"></textarea><button class="btn" onclick="addQuarry()">Добавить точку</button><h3>Последние заказы</h3>'+(d.orders.map(o=>'<div class="order"><b>'+esc(o.id)+'</b> · '+rub(o.total)+'<br>'+esc(o.product_name||'Товар')+' · статус: '+esc(o.status)+' · '+esc(o.created_at)+(o.customer_id?'<br>Telegram ID: '+esc(o.customer_id):'<br>Нет Telegram ID')+(o.photo_sent?'<br>Фото отправлено':(o.status!=='paid'?'<br><button class="btn" onclick="markPaid(\''+esc(o.id)+'\')">Подтвердить оплату и отправить фото</button>':''))+'</div>').join('')||'<p class="small">Заказов пока нет</p>')}catch(e){el.innerHTML='<div class="notice">'+esc(e.message)+'. Проверьте пароль и переменные Render.</div>'}}
 async function saveStock(id){const stock=Number(document.getElementById('stock'+id).value);if(!Number.isInteger(stock)||stock<0){alert('Укажи целое неотрицательное количество');return}try{await apiAdmin('/api/admin/variants/stock',{variant_id:id,stock});await loadCatalog();await loadAdmin();alert('Остаток сохранён')}catch(e){alert(e.message)}}
 async function adminAction(path,body){try{await apiAdmin(path,body);await loadCatalog();await loadAdmin();alert('Сохранено')}catch(e){alert(e.message)}}
+function filterInventoryOptions(){const city=String(document.getElementById('invCity').value),prod=document.getElementById('invProduct'),variant=document.getElementById('invVariant');Array.from(prod.options).forEach(o=>o.hidden=o.dataset.city!==city);if(prod.selectedOptions.length&&prod.selectedOptions[0].hidden){const next=Array.from(prod.options).find(o=>!o.hidden);if(next)prod.value=next.value;}Array.from(variant.options).forEach(o=>{const p=prod.selectedOptions[0];o.hidden=!p||o.dataset.product!==p.value||o.dataset.city!==city});if(variant.selectedOptions.length&&variant.selectedOptions[0].hidden){const next=Array.from(variant.options).find(o=>!o.hidden);if(next)variant.value=next.value;}}
+function addInventory(){adminAction('/api/admin/inventory',{city_id:Number(document.getElementById('invCity').value),product_id:Number(document.getElementById('invProduct').value),variant_id:Number(document.getElementById('invVariant').value),address:document.getElementById('invAddress').value,photo_url:document.getElementById('invPhoto').value})}
 function addCity(){adminAction('/api/admin/cities',{name:document.getElementById('newCity').value})}
 function addProduct(){adminAction('/api/admin/products',{city_id:Number(document.getElementById('newProductCity').value),name:document.getElementById('newProductName').value,description:document.getElementById('newProductDesc').value})}
 function savePrice(){let s=document.getElementById('variantId').selectedOptions[0];adminAction('/api/admin/variants',{product_id:Number(s.value),grams:Number(s.dataset.grams),price:Number(document.getElementById('newPrice').value)})}
