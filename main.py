@@ -123,6 +123,37 @@ def admin_data(x_admin_password: Optional[str] = Header(default=None)):
           "orders":[dict(r) for r in c.execute("SELECT * FROM orders ORDER BY created_at DESC LIMIT 100")]
         }
 
+
+@app.post("/api/admin/orders/{order_id}/mark-paid")
+def mark_order_paid(order_id: str, x_admin_password: Optional[str] = Header(default=None)):
+    admin_guard(x_admin_password)
+    if not TELEGRAM_BOT_TOKEN:
+        raise HTTPException(503, "Не задан TELEGRAM_BOT_TOKEN в Render → Environment")
+    with db() as conn:
+        order = conn.execute("SELECT o.*, p.name AS product_name FROM orders o JOIN products p ON p.id=o.product_id WHERE o.id=?", (order_id,)).fetchone()
+        if not order:
+            raise HTTPException(404, "Заказ не найден")
+        if not str(order["customer_id"]).isdigit():
+            raise HTTPException(400, "Нет Telegram ID покупателя. Покупатель должен открыть бота и нажать /start до заказа.")
+        if order["photo_sent"]:
+            return {"ok": True, "message": "Фото уже отправлено"}
+        photo_path = "olga.jpg" if "Ольга" in order["product_name"] else "misha.jpg"
+        photo_url = PUBLIC_BASE_URL + "/media/" + photo_path
+        caption = "Оплата подтверждена! Заказ " + order_id + ". " + order["product_name"] + " — " + str(order["total"]) + " ₽."
+        payload = urllib.parse.urlencode({"chat_id": order["customer_id"], "photo": photo_url, "caption": caption}).encode()
+        request = urllib.request.Request("https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/sendPhoto", data=payload, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            if not result.get("ok"):
+                raise HTTPException(502, "Telegram не принял фото. Проверьте, что покупатель запустил бота командой /start.")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(502, "Не удалось отправить фото. Проверьте токен бота и доступность Telegram.")
+        conn.execute("UPDATE orders SET status='paid', photo_sent=1 WHERE id=?", (order_id,))
+        return {"ok": True, "message": "Оплата отмечена, фото отправлено"}
+
 @app.post("/api/admin/cities")
 def add_city(item: CityIn, x_admin_password: Optional[str] = Header(default=None)):
     admin_guard(x_admin_password)
