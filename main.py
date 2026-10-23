@@ -81,6 +81,11 @@ def init_db():
           order_id TEXT UNIQUE,
           created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS support_sessions(
+          chat_id TEXT PRIMARY KEY,
+          order_id TEXT DEFAULT '',
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
         """)
         if c.execute("SELECT COUNT(*) FROM cities").fetchone()[0] == 0:
             city_ids = {}
@@ -237,7 +242,7 @@ def telegram_create_order(chat_id: int, city_id: int, product_id: int, variant_i
             (variant_id, product_id, city_id)).fetchone()
         if not v:
             return None, "Этот вариант больше недоступен. Выберите товар заново."
-        item = c.execute("""SELECT id FROM inventory_items WHERE city_id=? AND product_id=? AND variant_id=?
+        item = c.execute("""SELECT id,photo_url,address FROM inventory_items WHERE city_id=? AND product_id=? AND variant_id=?
             AND status='available' ORDER BY id LIMIT 1""", (city_id, product_id, variant_id)).fetchone()
         if not item:
             return None, "Сейчас этой позиции нет в наличии. Напишите администратору."
@@ -249,7 +254,7 @@ def telegram_create_order(chat_id: int, city_id: int, product_id: int, variant_i
         if c.execute("SELECT changes()").fetchone()[0] != 1:
             raise RuntimeError("Позицию уже забрал другой заказ. Попробуйте ещё раз.")
     notify_admin_new_order(order_id, city_id, product_id, variant_id, total, str(chat_id))
-    return {"order_id": order_id, "total": total, "product": v["product_name"], "grams": v["grams"]}, None
+    return {"order_id": order_id, "total": total, "product": v["product_name"], "grams": v["grams"], "photo_url": item["photo_url"], "address": item["address"]}, None
 
 @app.post("/api/telegram/webhook")
 async def telegram_webhook(request: Request):
@@ -279,7 +284,14 @@ async def telegram_webhook(request: Request):
                     pass
             if not chat_id:
                 return {"ok": True}
-            if data == "cities":
+            if data == "support":
+                bot_send(chat_id, "🆘 Поддержка PESOK\nНапишите следующим сообщением, с какой сложностью столкнулись.")
+            elif data.startswith("support:"):
+                support_order_id = data.split(":", 1)[1]
+                with db() as c:
+                    c.execute("INSERT OR REPLACE INTO support_sessions(chat_id,order_id,created_at) VALUES(?,?,CURRENT_TIMESTAMP)", (str(chat_id), support_order_id))
+                bot_send(chat_id, "🆘 Поддержка PESOK\nЗаказ: " + support_order_id + "\nОпишите проблему следующим сообщением — передадим её администратору.")
+            elif data == "cities":
                 bot_send(chat_id, "📍 Выберите город:", city_keyboard())
             elif data.startswith("city:"):
                 city_id = int(data.split(":")[1])
@@ -301,7 +313,7 @@ async def telegram_webhook(request: Request):
                 if error:
                     bot_send(chat_id, "⚠️ " + error, {"inline_keyboard": [[{"text": "📍 В каталог", "callback_data": "cities"}]]})
                 else:
-                    bot_send(chat_id, "✅ Заказ создан: " + order["order_id"] + "\n" + order["product"] + " · " + str(order["grams"]) + " г\nСумма: " + str(order["total"]) + " ₽\n\nПлатёж пока не подключён. Заказ зарезервирован, списания нет.", {"inline_keyboard": [[{"text": "🛒 Открыть Mini App", "web_app": {"url": PUBLIC_BASE_URL + "/"}}], [{"text": "Выбрать ещё", "callback_data": "cities"}]]})
+                    bot_send(chat_id, "✅ Заказ: " + order["order_id"] + "\nТовар: " + order["product"] + " · " + str(order["grams"]) + " г\nСумма: " + str(order["total"]) + " ₽\nФото заказа: " + order["photo_url"] + "\n\nЗаказ зарезервирован. Оплата пока не подключена, списания нет.", {"inline_keyboard": [[{"text": "🆘 Поддержка", "callback_data": "support:" + order["order_id"]}], [{"text": "🛒 Открыть Mini App", "web_app": {"url": PUBLIC_BASE_URL + "/"}}], [{"text": "Выбрать ещё", "callback_data": "cities"}]]})
             return {"ok": True}
         message = update.get("message") or update.get("edited_message") or {}
         chat = message.get("chat") or {}
@@ -317,8 +329,17 @@ async def telegram_webhook(request: Request):
                 [{"text": "🛒 Открыть PESOK market", "web_app": {"url": PUBLIC_BASE_URL + "/"}}]
             ]}
             bot_send(chat_id, welcome, keyboard)
-        elif chat_id and command in ("/help",):
-            bot_send(chat_id, "Выберите город и товар через меню. Для помощи с заказом напишите администратору.", {"inline_keyboard": [[{"text": "📍 Каталог", "callback_data": "cities"}], [{"text": "🛒 Открыть Mini App", "web_app": {"url": PUBLIC_BASE_URL + "/"}}]]})
+        elif chat_id and command in ("/help", "/support"):
+            with db() as c:
+                c.execute("INSERT OR REPLACE INTO support_sessions(chat_id,order_id,created_at) VALUES(?,?,CURRENT_TIMESTAMP)", (str(chat_id), "",))
+            bot_send(chat_id, "🆘 Поддержка PESOK\nОпишите проблему следующим сообщением.", {"inline_keyboard": [[{"text": "📍 Каталог", "callback_data": "cities"}], [{"text": "🆘 Поддержка", "callback_data": "support"}]]})
+        elif chat_id and text_in and not text_in.startswith("/"):
+            with db() as c:
+                session = c.execute("SELECT order_id FROM support_sessions WHERE chat_id=?", (str(chat_id),)).fetchone()
+            if session and ADMIN_TELEGRAM_CHAT_ID:
+                forwarded = "🆘 Обращение PESOK\nЗаказ: " + str(session["order_id"] or "не указан") + "\nTelegram ID клиента: " + str(chat_id) + "\nСообщение: " + text_in[:3000]
+                bot_send(ADMIN_TELEGRAM_CHAT_ID, forwarded)
+                bot_send(chat_id, "✅ Обращение передано в поддержку. Номер заказа: " + str(session["order_id"] or "не указан") + ".")
     except Exception as exc:
         print("Telegram webhook processing failed: " + str(exc)[:240])
     return {"ok": True}
