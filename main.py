@@ -160,7 +160,7 @@ def telegram_user_from_init_data(init_data: str) -> str:
         received_hash = data.pop("hash", "")
         if not received_hash:
             raise ValueError("missing hash")
-        check_string = "\\n".join(f"{k}={v}" for k, v in sorted(data.items()))
+        check_string = "\n".join(f"{k}={v}" for k, v in sorted(data.items()))
         secret_key = hmac.new(b"WebAppData", TELEGRAM_BOT_TOKEN.encode("utf-8"), hashlib.sha256).digest()
         calculated = hmac.new(secret_key, check_string.encode("utf-8"), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(calculated, received_hash):
@@ -519,11 +519,16 @@ def wallet_pay_order(payload: WalletPayIn, request: Request):
     telegram_id = require_telegram_user(request)
     with db() as c:
         c.execute("BEGIN IMMEDIATE")
-        order = c.execute("SELECT * FROM orders WHERE id=? AND customer_id=?", (payload.order_id,telegram_id)).fetchone()
+        order = c.execute("""SELECT o.*, p.name AS product_name, i.address AS item_address, i.photo_url AS item_photo_url
+          FROM orders o LEFT JOIN products p ON p.id=o.product_id
+          LEFT JOIN inventory_items i ON i.id=o.inventory_item_id
+          WHERE o.id=? AND o.customer_id=?""", (payload.order_id,telegram_id)).fetchone()
         if not order:
             raise HTTPException(404, "Заказ не найден в вашем кабинете")
         if order["status"] == "paid":
             raise HTTPException(409, "Заказ уже оплачен")
+        if order["payment_public_id"] and order["payment_status"] in ("CREATED", "PENDING"):
+            raise HTTPException(409, "Для этого заказа уже создана прямая оплата. Завершите её или создайте новый заказ.")
         account = c.execute("SELECT balance FROM wallet_accounts WHERE telegram_id=?", (telegram_id,)).fetchone()
         balance = int(account["balance"]) if account else 0
         amount = int(order["total"])
@@ -540,7 +545,25 @@ def wallet_pay_order(payload: WalletPayIn, request: Request):
           (telegram_id,-amount,"purchase",reference,"Оплата заказа "+payload.order_id))
         c.execute("UPDATE orders SET status='paid',payment_status='PAID' WHERE id=? AND customer_id=?", (payload.order_id,telegram_id))
         c.execute("UPDATE inventory_items SET status='sold' WHERE order_id=? AND status='reserved'", (payload.order_id,))
-    return {"ok":True,"order_id":payload.order_id,"balance":balance-amount}
+    delivered = False
+    if TELEGRAM_BOT_TOKEN and str(telegram_id).isdigit() and str(order["item_photo_url"] or "").startswith("https://") and order["item_address"]:
+        caption = "Заказ оплачен с баланса! Заказ " + payload.order_id + "\\n" + str(order["product_name"] or "Товар") + " — " + str(amount) + " ₽.\\nАдрес выдачи: " + str(order["item_address"]) + "\\nФото заказа: " + str(order["item_photo_url"])
+        body = json.dumps({"chat_id":telegram_id,"photo":order["item_photo_url"],"caption":caption},ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request("https://api.telegram.org/bot"+TELEGRAM_BOT_TOKEN+"/sendPhoto",data=body,headers={"Content-Type":"application/json"},method="POST")
+        try:
+            with urllib.request.urlopen(req,timeout=20) as response:
+                delivered = bool(json.loads(response.read().decode("utf-8")).get("ok"))
+        except Exception as exc:
+            print("Wallet order delivery failed: "+str(exc)[:200])
+    with db() as c:
+        if delivered:
+            c.execute("UPDATE orders SET photo_sent=1 WHERE id=?", (payload.order_id,))
+    if not delivered and ADMIN_TELEGRAM_CHAT_ID:
+        try:
+            bot_send(ADMIN_TELEGRAM_CHAT_ID, "⚠️ Заказ оплачен с баланса, но выдача требует проверки. Заказ: "+payload.order_id)
+        except Exception:
+            pass
+    return {"ok":True,"order_id":payload.order_id,"balance":balance-amount,"delivered":delivered}
 
 def bpay_create_payment(amount: int, order_id: str):
     if not BETAPAY_API_KEY:
