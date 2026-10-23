@@ -39,6 +39,10 @@ def init_db():
                     for grams, price in zip((0.5, 1, 2, 3), prices):
                         c.execute("INSERT INTO variants(product_id,grams,price) VALUES(?,?,?)", (pid,grams,price))
                 c.execute("INSERT INTO quarries(city_id,name,address,instructions) VALUES(?,?,?,?)", (city_id,"Карьер Ольга / Миша","Адрес уточняется у администратора","Точка выдачи будет подтверждена после оформления заказа."))
+        # Keep the agreed price list in sync for existing databases too.
+        for product in c.execute("SELECT id FROM products WHERE name IN ('Песок Ольга', 'Песок Миша')").fetchall():
+            for grams, price in zip((0.5, 1, 2, 3), (1800, 3200, 5800, 8500)):
+                c.execute("UPDATE variants SET price=? WHERE product_id=? AND grams=?", (price, product["id"], grams))
 init_db()
 
 class OrderIn(BaseModel):
