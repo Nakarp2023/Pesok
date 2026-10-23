@@ -118,6 +118,14 @@ def init_db():
           message_id INTEGER NOT NULL,
           updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS bot_users(
+          telegram_id TEXT PRIMARY KEY,
+          first_name TEXT DEFAULT '',
+          username TEXT DEFAULT '',
+          is_blocked INTEGER NOT NULL DEFAULT 0,
+          started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          last_seen_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
         """)
         if c.execute("SELECT COUNT(*) FROM cities").fetchone()[0] == 0:
             city_ids = {}
@@ -438,6 +446,14 @@ async def telegram_webhook(request: Request):
         text_in = str(message.get("text") or "").strip()
         chat_id = chat.get("id")
         command = text_in.split(" ", 1)[0].split("@", 1)[0]
+        if chat_id and chat.get("type") == "private":
+            user_obj = message.get("from") or {}
+            with db() as conn:
+                conn.execute("""INSERT INTO bot_users(telegram_id,first_name,username,last_seen_at)
+                    VALUES(?,?,?,CURRENT_TIMESTAMP)
+                    ON CONFLICT(telegram_id) DO UPDATE SET first_name=excluded.first_name,
+                    username=excluded.username,last_seen_at=CURRENT_TIMESTAMP""",
+                    (str(chat_id),str(user_obj.get("first_name") or "")[:200],str(user_obj.get("username") or "")[:100]))
         if chat_id and command in ("/start", "/shop", "/menu"):
             welcome = ("Добро пожаловать в PESOK market! 🏖️\n"
                        "Выберите город и товар прямо в чате или откройте магазин.\n"
@@ -739,6 +755,37 @@ async def bpay_webhook(request: Request):
         except Exception: pass
     return {"ok": True, "paid": True, "delivered": delivered}
 
+class BroadcastIn(BaseModel):
+    message: str = Field(min_length=1, max_length=3500)
+
+@app.post("/api/admin/broadcast")
+def admin_broadcast(payload: BroadcastIn, x_admin_password: Optional[str] = Header(default=None)):
+    admin_guard(x_admin_password)
+    if not TELEGRAM_BOT_TOKEN:
+        raise HTTPException(503, "Не задан TELEGRAM_BOT_TOKEN")
+    message = payload.message.strip()
+    if not message:
+        raise HTTPException(400, "Введите текст рассылки")
+    with db() as conn:
+        users = [r["telegram_id"] for r in conn.execute("SELECT telegram_id FROM bot_users WHERE is_blocked=0 ORDER BY started_at")]
+    sent = failed = blocked = 0
+    for user_id in users:
+        try:
+            result = telegram_api("sendMessage", {"chat_id":user_id,"text":message,"disable_web_page_preview":"true",
+                "reply_markup":{"inline_keyboard":[[{"text":"🛒 Открыть PESOK market","web_app":{"url":PUBLIC_BASE_URL+"/"}}]]}})
+            if result.get("ok"):
+                sent += 1
+            else:
+                failed += 1
+                desc = str(result.get("description") or "").lower()
+                if "blocked" in desc or "chat not found" in desc or "deactivated" in desc:
+                    blocked += 1
+                    with db() as conn:
+                        conn.execute("UPDATE bot_users SET is_blocked=1 WHERE telegram_id=?", (user_id,))
+        except Exception:
+            failed += 1
+    return {"ok":True,"total":len(users),"sent":sent,"failed":failed,"blocked":blocked}
+
 @app.get("/api/admin/data")
 def admin_data(x_admin_password: Optional[str] = Header(default=None)):
     admin_guard(x_admin_password)
@@ -999,7 +1046,8 @@ function showAdmin(){document.getElementById('admin').classList.toggle('hide');d
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
 async function apiAdmin(path,body){let r=await fetch(path,{method:body?'POST':'GET',cache:'no-store',headers:{'Content-Type':'application/json','X-Admin-Password':adminPass},body:body?JSON.stringify(body):undefined});let d=await r.json();if(!r.ok){let msg=d.detail;if(Array.isArray(msg))msg=msg.map(x=>x.msg||JSON.stringify(x)).join('; ');else if(msg&&typeof msg==='object')msg=msg.msg||JSON.stringify(msg);throw Error(typeof msg==='string'?msg:'Ошибка запроса ('+r.status+')')}return d}
 async function adminLogin(){adminPass=document.getElementById('adminPassword').value;await loadAdmin()}
-async function loadAdmin(){let el=document.getElementById('adminContent');try{let d=await apiAdmin('/api/admin/data');let cityOpts=d.cities.map(c=>'<option value="'+c.id+'">'+esc(c.name)+'</option>').join('');let productOpts=d.products.map(p=>'<option value="'+p.id+'" data-city="'+p.city_id+'">'+esc(p.name)+' · '+esc((d.cities.find(c=>c.id===p.city_id)||{}).name||'')+'</option>').join('');let variantOpts=d.variants.map(v=>{let p=d.products.find(p=>p.id===v.product_id);return '<option value="'+v.id+'" data-product="'+v.product_id+'" data-grams="'+v.grams+'" data-city="'+(p?p.city_id:'')+'">'+esc(p?p.name:'Товар')+' · '+v.grams+' г · '+rub(v.price)+'</option>'}).join('');el.innerHTML='<div class="notice">Выберите город и фасовку, вставьте ссылку на фото и нажмите «Готово». Каждое добавление создаёт отдельную позицию на складе.</div><h3>Добавить на склад</h3><label>Город<select id="invCity" onchange="filterInventoryOptions()">'+cityOpts+'</select></label><label>Позиция<select id="invProduct" onchange="filterInventoryOptions()">'+productOpts+'</select></label><label>Фасовка<select id="invVariant">'+variantOpts+'</select></label><input id="invPhoto" type="url" placeholder="Ссылка на фото (https://...)"><button class="btn" onclick="addInventory()">Готово</button><h3>Позиции склада</h3>'+(d.inventory.map(i=>'<div class="order"><b>'+esc(i.city_name)+' · '+esc(i.product_name)+' · '+i.grams+' г</b><br><a href="'+esc(i.photo_url)+'" target="_blank" rel="noopener">Открыть фото</a><br>Статус: <b>'+esc(i.status)+'</b>'+(i.order_id?'<br>Заказ: '+esc(i.order_id):'')+(i.status==='available'?'<br><button class="btn secondary" onclick="deleteInventory('+i.id+')">Удалить позицию</button>':'<br><span class="small">Удаление недоступно для занятой позиции</span>')+'</div>').join('')||'<p class="small">Склад пока пуст</p>')+'<h3>Добавить город</h3><input id="newCity" placeholder="Название города"><button class="btn" onclick="addCity()">Добавить город</button><h4>Удалить город</h4>'+(d.cities.map(c=>'<div class="order">'+esc(c.name)+'<br><button class="btn secondary" onclick="deleteAdminItem(\'/api/admin/cities/'+c.id+'/delete\',\'Удалить город '+esc(c.name)+'?\')">Удалить город</button></div>').join('')||'<p class="small">Городов нет</p>')+'<h3>Добавить товар</h3><select id="newProductCity">'+cityOpts+'</select><input id="newProductName" placeholder="Название товара"><textarea id="newProductDesc" placeholder="Описание"></textarea><button class="btn" onclick="addProduct()">Добавить товар</button><h4>Удалить товар</h4>'+(d.products.map(p=>'<div class="order">'+esc(p.name)+' · '+esc((d.cities.find(c=>c.id===p.city_id)||{}).name||'')+'<br><button class="btn secondary" onclick="deleteAdminItem(\'/api/admin/products/'+p.id+'/delete\',\'Удалить товар '+esc(p.name)+'?\')">Удалить товар</button></div>').join('')||'<p class="small">Товаров нет</p>')+'<h3>Установить цену</h3><select id="variantId">'+variantOpts+'</select><input id="newPrice" type="number" min="0" placeholder="Цена в рублях"><button class="btn" onclick="savePrice()">Сохранить цену</button><h4>Удалить фасовку</h4>'+(d.variants.map(v=>{let p=d.products.find(p=>p.id===v.product_id);return '<div class="order">'+esc(p?p.name:'Товар')+' · '+v.grams+' г · '+rub(v.price)+'<br><button class="btn secondary" onclick="deleteAdminItem(\'/api/admin/variants/'+v.id+'/delete\',\'Удалить фасовку '+v.grams+' г?\')">Удалить фасовку</button></div>'}).join('')||'<p class="small">Фасовок нет</p>')+'<h3>Последние заказы</h3>'+(d.orders.map(o=>'<div class="order"><b>'+esc(o.id)+'</b> · '+rub(o.total)+'<br>'+esc(o.product_name||'Товар')+' · статус: '+esc(o.status)+' · '+esc(o.created_at)+(o.customer_id?'<br>Telegram ID: '+esc(o.customer_id):'<br>Нет Telegram ID')+(o.photo_sent?'<br>Фото отправлено':(o.status!=='paid'?'<br><button class="btn" onclick="markPaid(\''+esc(o.id)+'\')">Подтвердить оплату и отправить фото</button>':''))+'</div>').join('')||'<p class="small">Заказов пока нет</p>');filterInventoryOptions()}catch(e){el.innerHTML='<div class="notice">'+esc(e.message)+'. Проверьте пароль и переменные Render.</div>'}}
+async function loadAdmin(){let el=document.getElementById('adminContent');try{let d=await apiAdmin('/api/admin/data');let cityOpts=d.cities.map(c=>'<option value="'+c.id+'">'+esc(c.name)+'</option>').join('');let productOpts=d.products.map(p=>'<option value="'+p.id+'" data-city="'+p.city_id+'">'+esc(p.name)+' · '+esc((d.cities.find(c=>c.id===p.city_id)||{}).name||'')+'</option>').join('');let variantOpts=d.variants.map(v=>{let p=d.products.find(p=>p.id===v.product_id);return '<option value="'+v.id+'" data-product="'+v.product_id+'" data-grams="'+v.grams+'" data-city="'+(p?p.city_id:'')+'">'+esc(p?p.name:'Товар')+' · '+v.grams+' г · '+rub(v.price)+'</option>'}).join('');el.innerHTML='<div class="notice">Выберите город и фасовку, вставьте ссылку на фото и нажмите «Готово». Каждое добавление создаёт отдельную позицию на складе.</div><h3>Добавить на склад</h3><label>Город<select id="invCity" onchange="filterInventoryOptions()">'+cityOpts+'</select></label><label>Позиция<select id="invProduct" onchange="filterInventoryOptions()">'+productOpts+'</select></label><label>Фасовка<select id="invVariant">'+variantOpts+'</select></label><input id="invPhoto" type="url" placeholder="Ссылка на фото (https://...)"><button class="btn" onclick="addInventory()">Готово</button><h3>Позиции склада</h3>'+(d.inventory.map(i=>'<div class="order"><b>'+esc(i.city_name)+' · '+esc(i.product_name)+' · '+i.grams+' г</b><br><a href="'+esc(i.photo_url)+'" target="_blank" rel="noopener">Открыть фото</a><br>Статус: <b>'+esc(i.status)+'</b>'+(i.order_id?'<br>Заказ: '+esc(i.order_id):'')+(i.status==='available'?'<br><button class="btn secondary" onclick="deleteInventory('+i.id+')">Удалить позицию</button>':'<br><span class="small">Удаление недоступно для занятой позиции</span>')+'</div>').join('')||'<p class="small">Склад пока пуст</p>')+'<h3>Добавить город</h3><input id="newCity" placeholder="Название города"><button class="btn" onclick="addCity()">Добавить город</button><h4>Удалить город</h4>'+(d.cities.map(c=>'<div class="order">'+esc(c.name)+'<br><button class="btn secondary" onclick="deleteAdminItem(\'/api/admin/cities/'+c.id+'/delete\',\'Удалить город '+esc(c.name)+'?\')">Удалить город</button></div>').join('')||'<p class="small">Городов нет</p>')+'<h3>Добавить товар</h3><select id="newProductCity">'+cityOpts+'</select><input id="newProductName" placeholder="Название товара"><textarea id="newProductDesc" placeholder="Описание"></textarea><button class="btn" onclick="addProduct()">Добавить товар</button><h4>Удалить товар</h4>'+(d.products.map(p=>'<div class="order">'+esc(p.name)+' · '+esc((d.cities.find(c=>c.id===p.city_id)||{}).name||'')+'<br><button class="btn secondary" onclick="deleteAdminItem(\'/api/admin/products/'+p.id+'/delete\',\'Удалить товар '+esc(p.name)+'?\')">Удалить товар</button></div>').join('')||'<p class="small">Товаров нет</p>')+'<h3>Установить цену</h3><select id="variantId">'+variantOpts+'</select><input id="newPrice" type="number" min="0" placeholder="Цена в рублях"><button class="btn" onclick="savePrice()">Сохранить цену</button><h4>Удалить фасовку</h4>'+(d.variants.map(v=>{let p=d.products.find(p=>p.id===v.product_id);return '<div class="order">'+esc(p?p.name:'Товар')+' · '+v.grams+' г · '+rub(v.price)+'<br><button class="btn secondary" onclick="deleteAdminItem(\'/api/admin/variants/'+v.id+'/delete\',\'Удалить фасовку '+v.grams+' г?\')">Удалить фасовку</button></div>'}).join('')||'<p class="small">Фасовок нет</p>')+'<h3>Рассылка клиентам</h3><div class="notice">Сообщение будет отправлено всем пользователям, которые запускали бота. Перед отправкой проверьте текст — отменить рассылку нельзя.</div><textarea id="broadcastMessage" placeholder="Текст сообщения для клиентов" rows="5" maxlength="3500"></textarea><button class="btn" onclick="sendBroadcast()">Отправить рассылку</button><div id="broadcastResult" class="small"></div><h3>Последние заказы</h3>'+(d.orders.map(o=>'<div class="order"><b>'+esc(o.id)+'</b> · '+rub(o.total)+'<br>'+esc(o.product_name||'Товар')+' · статус: '+esc(o.status)+' · '+esc(o.created_at)+(o.customer_id?'<br>Telegram ID: '+esc(o.customer_id):'<br>Нет Telegram ID')+(o.photo_sent?'<br>Фото отправлено':(o.status!=='paid'?'<br><button class="btn" onclick="markPaid(\''+esc(o.id)+'\')">Подтвердить оплату и отправить фото</button>':''))+'</div>').join('')||'<p class="small">Заказов пока нет</p>');filterInventoryOptions()}catch(e){el.innerHTML='<div class="notice">'+esc(e.message)+'. Проверьте пароль и переменные Render.</div>'}}
+async function sendBroadcast(){const message=document.getElementById('broadcastMessage').value.trim();if(!message){alert('Введите текст рассылки');return}if(!confirm('Отправить сообщение всем пользователям, которые запускали PESOK-бота?'))return;const out=document.getElementById('broadcastResult');out.textContent='Выполняется рассылка…';try{const d=await apiAdmin('/api/admin/broadcast',{message});out.textContent='Доставлено: '+d.sent+' из '+d.total+'. Ошибок: '+d.failed+'. Недоступных чатов: '+d.blocked+'.';alert(out.textContent)}catch(e){out.textContent='Ошибка: '+e.message;alert(e.message)}}
 async function saveStock(id){const stock=Number(document.getElementById('stock'+id).value);if(!Number.isInteger(stock)||stock<0){alert('Укажи целое неотрицательное количество');return}try{await apiAdmin('/api/admin/variants/stock',{variant_id:id,stock});await loadCatalog();await loadAdmin();alert('Остаток сохранён')}catch(e){alert(e.message)}}
 async function adminAction(path,body){try{await apiAdmin(path,body);await loadCatalog();await loadAdmin();alert('Сохранено')}catch(e){alert(e.message)}}
 function filterInventoryOptions(){const city=String(document.getElementById('invCity').value),prod=document.getElementById('invProduct'),variant=document.getElementById('invVariant');Array.from(prod.options).forEach(o=>o.hidden=o.dataset.city!==city);if(prod.selectedOptions.length&&prod.selectedOptions[0].hidden){const next=Array.from(prod.options).find(o=>!o.hidden);if(next)prod.value=next.value;}Array.from(variant.options).forEach(o=>{const p=prod.selectedOptions[0];o.hidden=!p||o.dataset.product!==p.value||o.dataset.city!==city});if(variant.selectedOptions.length&&variant.selectedOptions[0].hidden){const next=Array.from(variant.options).find(o=>!o.hidden);if(next)variant.value=next.value;}}
