@@ -411,12 +411,12 @@ async def telegram_webhook(request: Request):
                 message += "\n\nДля пополнения кошелька и подробной истории откройте Mini App."
                 bot_send(chat_id, message, {"inline_keyboard": [[{"text":"💳 Пополнить баланс / кабинет","web_app":{"url":PUBLIC_BASE_URL + "/"}}], [{"text":"📍 Каталог","callback_data":"cities"}]]})
             elif data == "support":
-                bot_send(chat_id, "🆘 Поддержка PESOK\nНапишите следующим сообщением, с какой сложностью столкнулись.")
+                bot_send(chat_id, "🆘 Поддержка PESOK\nНапишите следующим сообщением, с какой сложностью столкнулись, или свяжитесь напрямую: @sergotripcfs", {"inline_keyboard":[[{"text":"✉️ Написать в поддержку @sergotripcfs","url":"https://t.me/sergotripcfs"}]]})
             elif data.startswith("support:"):
                 support_order_id = data.split(":", 1)[1]
                 with db() as c:
                     c.execute("INSERT OR REPLACE INTO support_sessions(chat_id,order_id,created_at) VALUES(?,?,CURRENT_TIMESTAMP)", (str(chat_id), support_order_id))
-                bot_send(chat_id, "🆘 Поддержка PESOK\nЗаказ: " + support_order_id + "\nОпишите проблему следующим сообщением — передадим её администратору.")
+                bot_send(chat_id, "🆘 Поддержка PESOK\nЗаказ: " + support_order_id + "\nОпишите проблему здесь или свяжитесь напрямую: @sergotripcfs.", {"inline_keyboard":[[{"text":"✉️ Написать в поддержку @sergotripcfs","url":"https://t.me/sergotripcfs"}]]})
             elif data == "cities":
                 bot_send(chat_id, "📍 Выберите город:", city_keyboard())
             elif data.startswith("city:"):
@@ -467,7 +467,7 @@ async def telegram_webhook(request: Request):
         elif chat_id and command in ("/help", "/support"):
             with db() as c:
                 c.execute("INSERT OR REPLACE INTO support_sessions(chat_id,order_id,created_at) VALUES(?,?,CURRENT_TIMESTAMP)", (str(chat_id), "",))
-            bot_send(chat_id, "🆘 Поддержка PESOK\nОпишите проблему следующим сообщением.", {"inline_keyboard": [[{"text": "📍 Каталог", "callback_data": "cities"}], [{"text": "🆘 Поддержка", "callback_data": "support"}]]})
+            bot_send(chat_id, "🆘 Поддержка PESOK\nОпишите проблему следующим сообщением или напишите напрямую: @sergotripcfs.", {"inline_keyboard": [[{"text": "✉️ Написать в поддержку @sergotripcfs", "url": "https://t.me/sergotripcfs"}], [{"text": "📍 Каталог", "callback_data": "cities"}], [{"text": "🆘 Поддержка", "callback_data": "support"}]]})
         elif chat_id and text_in and not text_in.startswith("/"):
             with db() as c:
                 session = c.execute("SELECT order_id FROM support_sessions WHERE chat_id=?", (str(chat_id),)).fetchone()
