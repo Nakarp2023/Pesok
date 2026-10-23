@@ -162,6 +162,32 @@ def photo_misha():
     from fastapi.responses import Response
     return Response(content=base64.b64decode(PHOTO_MISHA_B64), media_type="image/jpeg")
 
+@app.on_event("startup")
+def register_telegram_webhook():
+    """Register the Telegram webhook automatically after deployment."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_WEBHOOK_SECRET:
+        print("Telegram webhook not registered: set TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET in Render.")
+        return
+    payload = urllib.parse.urlencode({
+        "url": PUBLIC_BASE_URL + "/api/telegram/webhook",
+        "secret_token": TELEGRAM_WEBHOOK_SECRET,
+        "allowed_updates": json.dumps(["message", "edited_message"])
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/setWebhook",
+        data=payload,
+        method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=12) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        if result.get("ok"):
+            print("Telegram webhook registered: " + PUBLIC_BASE_URL + "/api/telegram/webhook")
+        else:
+            print("Telegram webhook registration failed: " + str(result.get("description", "unknown"))[:200])
+    except Exception as exc:
+        print("Telegram webhook registration failed: " + str(exc)[:200])
+
 @app.post("/api/telegram/webhook")
 async def telegram_webhook(request: Request):
     """Telegram webhook for the customer-facing sales bot."""
