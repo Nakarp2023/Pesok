@@ -290,7 +290,7 @@ def bot_send(chat_id, text_out: str, keyboard=None):
             for row in rows
         )
         if not has_account:
-            rows.insert(0, [{"text": "👤 Личный кабинет / баланс", "callback_data": "account"}])
+            rows.insert(0, [{"text": "👤 Личный кабинет", "callback_data": "account"}])
         markup["inline_keyboard"] = rows
         keyboard = markup
     payload = {"chat_id": chat_id, "text": text_out}
@@ -431,7 +431,7 @@ async def telegram_webhook(request: Request):
                 if error:
                     bot_send(chat_id, "⚠️ " + error, {"inline_keyboard": [[{"text": "📍 В каталог", "callback_data": "cities"}]]})
                 else:
-                    bot_send(chat_id, "✅ Заказ: " + order["order_id"] + "\nТовар: " + order["product"] + " · " + str(order["grams"]) + " г\nСумма: " + str(order["total"]) + " ₽\nФото заказа: " + order["photo_url"] + "\n\nЗаказ зарезервирован. Оплата пока не подключена, списания нет.", {"inline_keyboard": [[{"text": "👤 Личный кабинет / баланс", "callback_data": "account"}], [{"text": "🆘 Поддержка", "callback_data": "support:" + order["order_id"]}], [{"text": "🛒 Открыть Mini App", "web_app": {"url": PUBLIC_BASE_URL + "/"}}], [{"text": "Выбрать ещё", "callback_data": "cities"}]]})
+                    bot_send(chat_id, "✅ Заказ: " + order["order_id"] + "\nТовар: " + order["product"] + " · " + str(order["grams"]) + " г\nСумма: " + str(order["total"]) + " ₽\nФото заказа: " + order["photo_url"] + "\n\nЗаказ зарезервирован. Оплата пока не подключена, списания нет.", {"inline_keyboard": [[{"text": "👤 Личный кабинет", "callback_data": "account"}], [{"text": "🆘 Поддержка", "callback_data": "support:" + order["order_id"]}], [{"text": "🛒 Открыть Mini App", "web_app": {"url": PUBLIC_BASE_URL + "/"}}], [{"text": "Выбрать ещё", "callback_data": "cities"}]]})
             return {"ok": True}
         message = update.get("message") or update.get("edited_message") or {}
         chat = message.get("chat") or {}
@@ -443,7 +443,7 @@ async def telegram_webhook(request: Request):
                        "Выберите город и товар прямо в чате или откройте магазин.\n"
                        "Наличие и стоимость отображаются в меню.")
             keyboard = {"inline_keyboard": [
-                [{"text": "👤 Личный кабинет / баланс", "callback_data": "account"}],
+                [{"text": "👤 Личный кабинет", "callback_data": "account"}],
                 [{"text": "📍 Выбрать город и товар", "callback_data": "cities"}],
                 [{"text": "🛒 Открыть PESOK market", "web_app": {"url": PUBLIC_BASE_URL + "/"}}]
             ]}
