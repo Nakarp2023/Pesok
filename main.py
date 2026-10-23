@@ -496,7 +496,13 @@ async def bpay_webhook(request: Request):
     except (TypeError, ValueError): raise HTTPException(400, "Invalid amount")
     with db() as c:
         order = c.execute("SELECT o.*, p.name AS product_name, i.address AS item_address, i.photo_url AS item_photo_url FROM orders o JOIN products p ON p.id=o.product_id LEFT JOIN inventory_items i ON i.id=o.inventory_item_id WHERE o.id=?", (order_id,)).fetchone()
-        if not order: raise HTTPException(404, "Order not found")
+        if not order:
+            # B PAY's dashboard test may send a synthetic order_id. The signature
+            # has already been verified, so acknowledge unknown test/stale orders
+            # to avoid pointless webhook retries; never mark anything as paid.
+            print("B PAY webhook ignored: order_not_found; "
+                  f"order_id_present={bool(order_id)} public_id_present={bool(public_id)}")
+            return {"ok": True, "ignored": "order_not_found"}
         if int(order["total"]) != amount or str(order["payment_public_id"] or "") != public_id: raise HTTPException(400, "Payment does not match order")
         if order["status"] == "paid" and order["photo_sent"]: return {"ok": True, "duplicate": True}
         c.execute("UPDATE orders SET status='paid', payment_status='PAID' WHERE id=?", (order_id,))
