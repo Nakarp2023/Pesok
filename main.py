@@ -282,8 +282,8 @@ def telegram_api(method: str, payload_obj: dict):
 def bot_send(chat_id, text_out: str, keyboard=None):
     # Always keep a personal-account shortcut as the first button for customers.
     is_admin = bool(ADMIN_TELEGRAM_CHAT_ID) and str(chat_id) == str(ADMIN_TELEGRAM_CHAT_ID)
-    if keyboard and not is_admin:
-        markup = dict(keyboard)
+    if not is_admin:
+        markup = dict(keyboard or {})
         rows = list(markup.get("inline_keyboard") or [])
         has_account = any(
             any(str(button.get("callback_data") or "") == "account" for button in row)
