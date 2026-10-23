@@ -21,6 +21,9 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 ADMIN_TELEGRAM_CHAT_ID = os.getenv("ADMIN_TELEGRAM_CHAT_ID", "").strip()
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://pesok-store.onrender.com").rstrip("/")
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
+BETAPAY_API_KEY = os.getenv("BETAPAY_API_KEY", "").strip()
+BETAPAY_WEBHOOK_SECRET = os.getenv("BETAPAY_WEBHOOK_SECRET", "").strip()
+BETAPAY_API_BASE = "https://b-pay-provider.com/api/v1"
 PHOTO_OLGA_B64 = "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"
 PHOTO_MISHA_B64 = "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"
 app = FastAPI(title="PESOK Store", version="0.1.0")
@@ -106,6 +109,12 @@ def init_db():
             c.execute("ALTER TABLE orders ADD COLUMN photo_sent INTEGER NOT NULL DEFAULT 0")
         if "inventory_item_id" not in order_cols:
             c.execute("ALTER TABLE orders ADD COLUMN inventory_item_id INTEGER")
+        if "payment_public_id" not in order_cols:
+            c.execute("ALTER TABLE orders ADD COLUMN payment_public_id TEXT")
+        if "payment_url" not in order_cols:
+            c.execute("ALTER TABLE orders ADD COLUMN payment_url TEXT")
+        if "payment_status" not in order_cols:
+            c.execute("ALTER TABLE orders ADD COLUMN payment_status TEXT DEFAULT 'NOT_CREATED'")
         variant_cols = [r["name"] for r in c.execute("PRAGMA table_info(variants)").fetchall()]
         if "stock" not in variant_cols:
             c.execute("ALTER TABLE variants ADD COLUMN stock INTEGER NOT NULL DEFAULT 0")
@@ -416,6 +425,89 @@ def create_order(order: OrderIn):
         return {"order_id": oid, "total": total, "status": "demo_pending",
                 "message": "Заказ сохранён, позиция зарезервирована. Оплата пока не подключена; списания нет."}
 
+def bpay_create_payment(amount: int, order_id: str):
+    if not BETAPAY_API_KEY:
+        raise HTTPException(503, "Не задан BETAPAY_API_KEY в Render Environment")
+    payload = {"amount": amount, "currency": "RUB", "order_id": order_id,
+               "description": "PESOK market — заказ " + order_id,
+               "success_url": PUBLIC_BASE_URL + "/?payment=success&order_id=" + urllib.parse.quote(order_id),
+               "fail_url": PUBLIC_BASE_URL + "/?payment=failed&order_id=" + urllib.parse.quote(order_id)}
+    req = urllib.request.Request(BETAPAY_API_BASE + "/payment/create",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Authorization": "Bearer " + BETAPAY_API_KEY, "Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        detail = str(exc)
+        if hasattr(exc, "read"):
+            try: detail = exc.read().decode("utf-8")[:300]
+            except Exception: pass
+        raise HTTPException(502, "Ошибка B PAY: " + detail[:250])
+    payment = result.get("payment") if isinstance(result, dict) else None
+    if not result.get("ok") or not isinstance(payment, dict):
+        raise HTTPException(502, "B PAY не создал платёж. Проверьте API-ключ и настройки проекта.")
+    public_id = str(payment.get("public_id") or "")
+    payment_url = str(payment.get("payment_url") or "")
+    if str(payment.get("order_id") or order_id) != order_id or int(payment.get("amount", -1)) != amount or not public_id or not payment_url.startswith("https://"):
+        raise HTTPException(502, "Ответ B PAY не прошёл проверку заказа и суммы.")
+    return payment
+
+@app.post("/api/orders/{order_id}/payment")
+def create_order_payment(order_id: str):
+    with db() as c:
+        order = c.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
+        if not order: raise HTTPException(404, "Заказ не найден")
+        if order["status"] == "paid": raise HTTPException(409, "Заказ уже оплачен")
+        if order["payment_url"] and order["payment_status"] in ("CREATED", "PENDING"):
+            return {"ok": True, "payment_url": order["payment_url"], "public_id": order["payment_public_id"]}
+        amount = int(order["total"])
+    payment = bpay_create_payment(amount, order_id)
+    with db() as c:
+        c.execute("UPDATE orders SET payment_public_id=?, payment_url=?, payment_status=?, status='payment_pending' WHERE id=? AND status!='paid'",
+            (payment["public_id"], payment["payment_url"], str(payment.get("status") or "CREATED"), order_id))
+    return {"ok": True, "payment_url": payment["payment_url"], "public_id": payment["public_id"], "order_id": order_id}
+
+@app.post("/api/payments/bpay/webhook")
+async def bpay_webhook(request: Request):
+    if not BETAPAY_WEBHOOK_SECRET: raise HTTPException(503, "BETAPAY_WEBHOOK_SECRET is not configured")
+    raw = await request.body()
+    signature = request.headers.get("X-Betapay-Signature", "")
+    expected = "sha256=" + hmac.new(BETAPAY_WEBHOOK_SECRET.encode("utf-8"), raw, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, expected): raise HTTPException(403, "Invalid B PAY signature")
+    try: event_obj = json.loads(raw.decode("utf-8"))
+    except Exception: raise HTTPException(400, "Invalid JSON")
+    event = str(event_obj.get("event") or "")
+    data = event_obj.get("data") if isinstance(event_obj.get("data"), dict) else event_obj
+    if event != "payment.success": return {"ok": True, "ignored": event}
+    order_id = str(data.get("order_id") or "")
+    public_id = str(data.get("public_id") or "")
+    if not order_id or not public_id or str(data.get("currency") or "RUB") != "RUB": raise HTTPException(400, "Invalid payment data")
+    try: amount = int(data.get("amount"))
+    except (TypeError, ValueError): raise HTTPException(400, "Invalid amount")
+    with db() as c:
+        order = c.execute("SELECT o.*, p.name AS product_name, i.address AS item_address, i.photo_url AS item_photo_url FROM orders o JOIN products p ON p.id=o.product_id LEFT JOIN inventory_items i ON i.id=o.inventory_item_id WHERE o.id=?", (order_id,)).fetchone()
+        if not order: raise HTTPException(404, "Order not found")
+        if int(order["total"]) != amount or str(order["payment_public_id"] or "") != public_id: raise HTTPException(400, "Payment does not match order")
+        if order["status"] == "paid" and order["photo_sent"]: return {"ok": True, "duplicate": True}
+        c.execute("UPDATE orders SET status='paid', payment_status='PAID' WHERE id=?", (order_id,))
+    delivered = False
+    if TELEGRAM_BOT_TOKEN and str(order["customer_id"]).isdigit() and str(order["item_photo_url"] or "").startswith("https://") and order["item_address"]:
+        caption = "Оплата подтверждена! Заказ " + order_id + "\n" + order["product_name"] + " — " + str(amount) + " ₽.\nАдрес выдачи: " + order["item_address"] + "\nФото заказа: " + order["item_photo_url"]
+        payload = json.dumps({"chat_id": order["customer_id"], "photo": order["item_photo_url"], "caption": caption}, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request("https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/sendPhoto", data=payload, headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=20) as response: delivered = bool(json.loads(response.read().decode("utf-8")).get("ok"))
+        except Exception as exc: print("Paid order delivery failed: " + str(exc)[:200])
+    if delivered:
+        with db() as c:
+            c.execute("UPDATE inventory_items SET status='sold' WHERE id=? AND order_id=?", (order["inventory_item_id"], order_id))
+            c.execute("UPDATE orders SET photo_sent=1 WHERE id=?", (order_id,))
+    elif ADMIN_TELEGRAM_CHAT_ID:
+        try: bot_send(ADMIN_TELEGRAM_CHAT_ID, "⚠️ Оплата подтверждена, но выдача требует проверки. Заказ: " + order_id)
+        except Exception: pass
+    return {"ok": True, "paid": True, "delivered": delivered}
+
 @app.get("/api/admin/data")
 def admin_data(x_admin_password: Optional[str] = Header(default=None)):
     admin_guard(x_admin_password)
@@ -656,7 +748,7 @@ function renderProducts(){
   }).join(''):'<div class="notice">В этом городе пока нет товаров.</div>';
 }
 function priceUpdate(pid){let s=document.querySelector('input[name="variant'+pid+'"]:checked');if(s){let p=catalog.products.find(x=>x.id===pid);let b=document.querySelector('#products .product');}}
-async function makeOrder(pid){let p=catalog.products.find(x=>x.id===pid),selected=document.querySelector('input[name="variant'+pid+'"]:checked'),v=selected?Number(selected.value):null;if(!p||!v){alert('Выберите один вариант фасовки');return;}try{let r=await fetch('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({city_id:cityId,product_id:pid,variant_id:v,quantity:1,customer_id:tg&&tg.initDataUnsafe&&tg.initDataUnsafe.user?String(tg.initDataUnsafe.user.id):''})});let d=await r.json();let el=document.getElementById('orderResult');el.classList.remove('hide');el.innerHTML=r.ok?'<b>Заказ создан: '+esc(d.order_id)+'</b><br>Сумма: '+rub(d.total)+'<br>'+esc(d.message):'Ошибка: '+esc(d.detail||'Не удалось оформить заказ');el.scrollIntoView({behavior:'smooth',block:'center'})}catch(e){alert('Не удалось связаться с сервером')}}
+async function makeOrder(pid){let p=catalog.products.find(x=>x.id===pid),selected=document.querySelector('input[name="variant'+pid+'"]:checked'),v=selected?Number(selected.value):null;if(!p||!v){alert('Выберите один вариант фасовки');return;}try{let r=await fetch('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({city_id:cityId,product_id:pid,variant_id:v,quantity:1,customer_id:tg&&tg.initDataUnsafe&&tg.initDataUnsafe.user?String(tg.initDataUnsafe.user.id):''})});let d=await r.json();let el=document.getElementById('orderResult');el.classList.remove('hide');if(!r.ok){el.innerHTML='Ошибка: '+esc(d.detail||'Не удалось оформить заказ');}else{el.innerHTML='<b>Заказ: '+esc(d.order_id)+'</b><br>Сумма: '+rub(d.total)+'<br>Создаём ссылку оплаты…';let pr=await fetch('/api/orders/'+encodeURIComponent(d.order_id)+'/payment',{method:'POST'});let pd=await pr.json();if(pr.ok&&pd.payment_url){el.innerHTML='<b>Заказ: '+esc(d.order_id)+'</b><br>Сумма: '+rub(d.total)+'<br><a class="btn" href="'+esc(pd.payment_url)+'" target="_blank" rel="noopener">Перейти к оплате</a><br><small>Заказ будет обработан после подтверждения платежа.</small>';}else{el.innerHTML='<b>Заказ: '+esc(d.order_id)+'</b><br>Сумма: '+rub(d.total)+'<br>'+esc(pd.detail||'Не удалось создать платёж. Обратитесь в поддержку.');}}el.scrollIntoView({behavior:'smooth',block:'center'});}catch(e){alert('Не удалось связаться с сервером')}}
 function showAdmin(){document.getElementById('admin').classList.toggle('hide');document.getElementById('admin').scrollIntoView({behavior:'smooth'})}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
 async function apiAdmin(path,body){let r=await fetch(path,{method:body?'POST':'GET',cache:'no-store',headers:{'Content-Type':'application/json','X-Admin-Password':adminPass},body:body?JSON.stringify(body):undefined});let d=await r.json();if(!r.ok){let msg=d.detail;if(Array.isArray(msg))msg=msg.map(x=>x.msg||JSON.stringify(x)).join('; ');else if(msg&&typeof msg==='object')msg=msg.msg||JSON.stringify(msg);throw Error(typeof msg==='string'?msg:'Ошибка запроса ('+r.status+')')}return d}
