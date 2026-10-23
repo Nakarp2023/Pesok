@@ -35,7 +35,7 @@ def init_db():
                     ("Песок Миша", "Песок средней фракции от карьера Миша")
                 ]:
                     pid = c.execute("INSERT INTO products(city_id,name,description) VALUES(?,?,?)", (city_id,name,desc)).lastrowid
-                    prices = (150, 250, 450, 650) if name == "Песок Ольга" else (300, 500, 900, 1300)
+                    prices = (1800, 3200, 5800, 8500)
                     for grams, price in zip((0.5, 1, 2, 3), prices):
                         c.execute("INSERT INTO variants(product_id,grams,price) VALUES(?,?,?)", (pid,grams,price))
                 c.execute("INSERT INTO quarries(city_id,name,address,instructions) VALUES(?,?,?,?)", (city_id,"Карьер Ольга / Миша","Адрес уточняется у администратора","Точка выдачи будет подтверждена после оформления заказа."))
