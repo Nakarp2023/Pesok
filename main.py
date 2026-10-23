@@ -473,8 +473,17 @@ async def bpay_webhook(request: Request):
     if not BETAPAY_WEBHOOK_SECRET: raise HTTPException(503, "BETAPAY_WEBHOOK_SECRET is not configured")
     raw = await request.body()
     signature = request.headers.get("X-Betapay-Signature", "")
-    expected = "sha256=" + hmac.new(BETAPAY_WEBHOOK_SECRET.encode("utf-8"), raw, hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(signature, expected): raise HTTPException(403, "Invalid B PAY signature")
+    secret_bytes = BETAPAY_WEBHOOK_SECRET.encode("utf-8")
+    expected = "sha256=" + hmac.new(secret_bytes, raw, hashlib.sha256).hexdigest()
+    # Safe diagnostics: never log the secret, received signature, or calculated digest.
+    if not signature or not signature.startswith("sha256="):
+        print("B PAY webhook signature rejected: header_missing_or_wrong_format; "
+              f"header_present={bool(signature)} raw_bytes={len(raw)} secret_bytes={len(secret_bytes)}")
+        raise HTTPException(403, "Invalid B PAY signature")
+    if not hmac.compare_digest(signature.strip(), expected):
+        print("B PAY webhook signature rejected: digest_mismatch; "
+              f"header_length={len(signature)} raw_bytes={len(raw)} secret_bytes={len(secret_bytes)}")
+        raise HTTPException(403, "Invalid B PAY signature")
     try: event_obj = json.loads(raw.decode("utf-8"))
     except Exception: raise HTTPException(400, "Invalid JSON")
     event = str(event_obj.get("event") or "")
@@ -499,11 +508,14 @@ async def bpay_webhook(request: Request):
         try:
             with urllib.request.urlopen(req, timeout=20) as response: delivered = bool(json.loads(response.read().decode("utf-8")).get("ok"))
         except Exception as exc: print("Paid order delivery failed: " + str(exc)[:200])
-    if delivered:
-        with db() as c:
-            c.execute("UPDATE inventory_items SET status='sold' WHERE id=? AND order_id=?", (order["inventory_item_id"], order_id))
+    # Once payment is confirmed, never leave the reserved item available for resale
+    # just because Telegram photo delivery temporarily failed.
+    with db() as c:
+        c.execute("UPDATE inventory_items SET status='sold' WHERE id=? AND order_id=? AND status IN ('reserved','sold')",
+                  (order["inventory_item_id"], order_id))
+        if delivered:
             c.execute("UPDATE orders SET photo_sent=1 WHERE id=?", (order_id,))
-    elif ADMIN_TELEGRAM_CHAT_ID:
+    if not delivered and ADMIN_TELEGRAM_CHAT_ID:
         try: bot_send(ADMIN_TELEGRAM_CHAT_ID, "⚠️ Оплата подтверждена, но выдача требует проверки. Заказ: " + order_id)
         except Exception: pass
     return {"ok": True, "paid": True, "delivered": delivered}
