@@ -288,48 +288,43 @@ def telegram_api(method: str, payload_obj: dict):
     return result
 
 def bot_send(chat_id, text_out: str, keyboard=None, photo=None):
-    # Admin conversations are intentionally preserved; customer chats keep only the latest bot message.
-    is_admin = bool(ADMIN_TELEGRAM_CHAT_ID) and str(chat_id) == str(ADMIN_TELEGRAM_CHAT_ID)
-    if not is_admin:
-        markup = dict(keyboard or {})
-        rows = list(markup.get("inline_keyboard") or [])
-        has_account = any(
-            any(str(button.get("callback_data") or "") == "account" for button in row)
-            for row in rows
-        )
-        if not has_account:
-            rows.insert(0, [{"text": "👤 Личный кабинет", "callback_data": "account"}])
-        has_support_contact = any(
-            any(str(button.get("url") or "") == "https://t.me/pesok_one" for button in row)
-            for row in rows
-        )
-        if not has_support_contact:
-            rows.insert(1 if rows and str(rows[0][0].get("callback_data") or "") == "account" else 0,
-                        [{"text": "🆘 Связаться с поддержкой", "url": "https://t.me/pesok_one"}])
-        markup["inline_keyboard"] = rows
-        keyboard = markup
+    # Apply the same customer-facing controls and cleanup even when the owner tests the bot.
+    markup = dict(keyboard or {})
+    rows = list(markup.get("inline_keyboard") or [])
+    has_account = any(
+        any(str(button.get("callback_data") or "") == "account" for button in row)
+        for row in rows
+    )
+    if not has_account:
+        rows.insert(0, [{"text": "👤 Личный кабинет", "callback_data": "account"}])
+    has_support_contact = any(
+        any(str(button.get("url") or "") == "https://t.me/pesok_one" for button in row)
+        for row in rows
+    )
+    if not has_support_contact:
+        rows.insert(1 if rows and str(rows[0][0].get("callback_data") or "") == "account" else 0,
+                    [{"text": "🆘 Связаться с поддержкой", "url": "https://t.me/pesok_one"}])
+    markup["inline_keyboard"] = rows
+    keyboard = markup
 
-    # Delete the previously tracked bot message BEFORE sending the next one.
-    # This avoids leaving stale menus behind when users navigate quickly.
-    if not is_admin:
-        previous = None
+    # Delete the previously tracked bot message before sending the next one.
+    previous = None
+    try:
+        with db() as c:
+            previous = c.execute(
+                "SELECT message_id FROM bot_last_messages WHERE chat_id=?",
+                (str(chat_id),)
+            ).fetchone()
+    except Exception as exc:
+        print("Previous bot message lookup failed: " + str(exc)[:160])
+    if previous and previous["message_id"]:
         try:
-            with db() as c:
-                previous = c.execute(
-                    "SELECT message_id FROM bot_last_messages WHERE chat_id=?",
-                    (str(chat_id),)
-                ).fetchone()
+            telegram_api("deleteMessage", {
+                "chat_id": chat_id,
+                "message_id": int(previous["message_id"])
+            })
         except Exception as exc:
-            print("Previous bot message lookup failed: " + str(exc)[:160])
-        if previous and previous["message_id"]:
-            try:
-                telegram_api("deleteMessage", {
-                    "chat_id": chat_id,
-                    "message_id": int(previous["message_id"])
-                })
-            except Exception as exc:
-                # Telegram can reject deletion if a message is already gone or too old.
-                print("Previous bot message cleanup skipped: " + str(exc)[:160])
+            print("Previous bot message cleanup skipped: " + str(exc)[:160])
 
     payload = {"chat_id": chat_id}
     if photo:
@@ -341,18 +336,17 @@ def bot_send(chat_id, text_out: str, keyboard=None, photo=None):
         payload["reply_markup"] = keyboard
     result = telegram_api("sendPhoto" if photo else "sendMessage", payload)
 
-    if not is_admin:
-        new_message_id = (result.get("result") or {}).get("message_id")
-        if new_message_id:
-            try:
-                with db() as c:
-                    c.execute(
-                        "INSERT INTO bot_last_messages(chat_id,message_id,updated_at) VALUES(?,?,CURRENT_TIMESTAMP) "
-                        "ON CONFLICT(chat_id) DO UPDATE SET message_id=excluded.message_id,updated_at=CURRENT_TIMESTAMP",
-                        (str(chat_id), int(new_message_id))
-                    )
-            except Exception as exc:
-                print("Latest bot message tracking failed: " + str(exc)[:160])
+    new_message_id = (result.get("result") or {}).get("message_id")
+    if new_message_id:
+        try:
+            with db() as c:
+                c.execute(
+                    "INSERT INTO bot_last_messages(chat_id,message_id,updated_at) VALUES(?,?,CURRENT_TIMESTAMP) "
+                    "ON CONFLICT(chat_id) DO UPDATE SET message_id=excluded.message_id,updated_at=CURRENT_TIMESTAMP",
+                    (str(chat_id), int(new_message_id))
+                )
+        except Exception as exc:
+            print("Latest bot message tracking failed: " + str(exc)[:160])
     return result
 
 def city_keyboard():
