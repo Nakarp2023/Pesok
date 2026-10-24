@@ -288,7 +288,7 @@ def telegram_api(method: str, payload_obj: dict):
     return result
 
 def bot_send(chat_id, text_out: str, keyboard=None, photo=None):
-    # Always keep a personal-account shortcut as the first button for customers.
+    # Admin conversations are intentionally preserved; customer chats keep only the latest bot message.
     is_admin = bool(ADMIN_TELEGRAM_CHAT_ID) and str(chat_id) == str(ADMIN_TELEGRAM_CHAT_ID)
     if not is_admin:
         markup = dict(keyboard or {})
@@ -304,11 +304,33 @@ def bot_send(chat_id, text_out: str, keyboard=None, photo=None):
             for row in rows
         )
         if not has_support_contact:
-            # Keep support immediately visible, directly below the account shortcut.
             rows.insert(1 if rows and str(rows[0][0].get("callback_data") or "") == "account" else 0,
                         [{"text": "🆘 Связаться с поддержкой", "url": "https://t.me/pesok_one"}])
         markup["inline_keyboard"] = rows
         keyboard = markup
+
+    # Delete the previously tracked bot message BEFORE sending the next one.
+    # This avoids leaving stale menus behind when users navigate quickly.
+    if not is_admin:
+        previous = None
+        try:
+            with db() as c:
+                previous = c.execute(
+                    "SELECT message_id FROM bot_last_messages WHERE chat_id=?",
+                    (str(chat_id),)
+                ).fetchone()
+        except Exception as exc:
+            print("Previous bot message lookup failed: " + str(exc)[:160])
+        if previous and previous["message_id"]:
+            try:
+                telegram_api("deleteMessage", {
+                    "chat_id": chat_id,
+                    "message_id": int(previous["message_id"])
+                })
+            except Exception as exc:
+                # Telegram can reject deletion if a message is already gone or too old.
+                print("Previous bot message cleanup skipped: " + str(exc)[:160])
+
     payload = {"chat_id": chat_id}
     if photo:
         payload["photo"] = photo
@@ -318,19 +340,19 @@ def bot_send(chat_id, text_out: str, keyboard=None, photo=None):
     if keyboard:
         payload["reply_markup"] = keyboard
     result = telegram_api("sendPhoto" if photo else "sendMessage", payload)
-    # Keep the chat tidy: replace the previous bot message after the new one is sent.
+
     if not is_admin:
         new_message_id = (result.get("result") or {}).get("message_id")
-        with db() as c:
-            previous = c.execute("SELECT message_id FROM bot_last_messages WHERE chat_id=?", (str(chat_id),)).fetchone()
-            c.execute("INSERT INTO bot_last_messages(chat_id,message_id,updated_at) VALUES(?,?,CURRENT_TIMESTAMP) "
-                      "ON CONFLICT(chat_id) DO UPDATE SET message_id=excluded.message_id,updated_at=CURRENT_TIMESTAMP",
-                      (str(chat_id), int(new_message_id or 0)))
-        if previous and previous["message_id"] and previous["message_id"] != new_message_id:
+        if new_message_id:
             try:
-                telegram_api("deleteMessage", {"chat_id": chat_id, "message_id": int(previous["message_id"])})
+                with db() as c:
+                    c.execute(
+                        "INSERT INTO bot_last_messages(chat_id,message_id,updated_at) VALUES(?,?,CURRENT_TIMESTAMP) "
+                        "ON CONFLICT(chat_id) DO UPDATE SET message_id=excluded.message_id,updated_at=CURRENT_TIMESTAMP",
+                        (str(chat_id), int(new_message_id))
+                    )
             except Exception as exc:
-                print("Previous bot message cleanup skipped: " + str(exc)[:120])
+                print("Latest bot message tracking failed: " + str(exc)[:160])
     return result
 
 def city_keyboard():
