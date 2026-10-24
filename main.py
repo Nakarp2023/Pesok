@@ -304,7 +304,9 @@ def bot_send(chat_id, text_out: str, keyboard=None, photo=None):
             for row in rows
         )
         if not has_support_contact:
-            rows.append([{"text": "🆘 Связаться с поддержкой", "url": "https://t.me/pesok_one"}])
+            # Keep support immediately visible, directly below the account shortcut.
+            rows.insert(1 if rows and str(rows[0][0].get("callback_data") or "") == "account" else 0,
+                        [{"text": "🆘 Связаться с поддержкой", "url": "https://t.me/pesok_one"}])
         markup["inline_keyboard"] = rows
         keyboard = markup
     payload = {"chat_id": chat_id}
@@ -334,7 +336,9 @@ def bot_send(chat_id, text_out: str, keyboard=None, photo=None):
 def city_keyboard():
     with db() as c:
         rows = c.execute("SELECT id,name FROM cities ORDER BY name").fetchall()
-    return {"inline_keyboard": [[{"text": row["name"], "callback_data": "city:" + str(row["id"])}] for row in rows]}
+    buttons = [[{"text": row["name"], "callback_data": "city:" + str(row["id"])}] for row in rows]
+    buttons.append([{"text": "⬅️ Назад в личный кабинет", "callback_data": "account"}])
+    return {"inline_keyboard": buttons}
 
 def product_keyboard(city_id: int):
     with db() as c:
